@@ -96,20 +96,45 @@ class CustomDataset(data.Dataset):
         graphInstance = self.graphInstances[idx]
         solInstance = self.solInstances[idx]
 
-        print("node_features: ", type(graphInstance.node_features))
-        print("edge_index: ", type(graphInstance.edge_index))
-        print("edge_features: ", type(graphInstance.edge_features))
-
         if self.transform:
-            graphInstance = dc.feat.GraphData(self.transform(graphInstance.node_features), self.transform(graphInstance.edge_index), self.transform(graphInstance.edge_features))
+            graphInstanceNodeFeatures = self.transform(graphInstance.node_features)
+            graphInstanceEdgeIndex = self.transform(graphInstance.edge_index)
+            graphInstanceEdgeFeatures = self.transform(graphInstance.edge_features)
+
         if self.target_transform:
             solInstance = self.target_transform(solInstance)
+
+        return graphInstanceNodeFeatures, graphInstanceEdgeIndex, graphInstanceEdgeFeatures, solInstance
+
+        '''
+        print("node_features type: ", type(graphInstance.node_features))
+        print("edge_index type: ", type(graphInstance.edge_index))
+        print("edge_features type: ", type(graphInstance.edge_features))
+
+        if self.transform:
+            try:
+                graphInstance = dc.feat.GraphData(self.transform(graphInstance.node_features), self.transform(graphInstance.edge_index), self.transform(graphInstance.edge_features))
+            except:
+                print("this is bad - let's investigate some more")
+                print("node_features type: ", type(graphInstance.node_features))
+                print("edge_index type: ", type(graphInstance.edge_index))
+                print("edge_features type: ", type(graphInstance.edge_features))
+                print("node_features: ", graphInstance.node_features)
+                print("edge_index: ", graphInstance.edge_index)
+                print("edge_features: ", graphInstance.edge_features)
+                print("investigation concluded")
+        if self.target_transform:
+            try:
+                solInstance = self.target_transform(solInstance)
+            except:
+                print("this is really bad - this shouldn't be an issue with a solInstance")
         return graphInstance, solInstance
+        '''
 
 def train_val_test_split():
     graph, sol = featurize_data()
 
-    dataset = CustomDataset(graphAll=graph, solAll=sol, transform=Compose([ToTensor()]), target_transform=Compose([ToTensor()]))
+    dataset = CustomDataset(graphAll=graph, solAll=sol, transform=Compose([ToTensor()]))
 
     cores = multiprocessing.cpu_count() # Count the number of cores in a computer
     # batch_size=1 was original default - 100 was used in bondnet paper
@@ -159,7 +184,7 @@ class InitialEmbedding(torch.nn.Module):
         self.fc_initial_embedding = nn.Linear(c_in, c_out)
     
     def forward(self, features):
-        features = self.fc(features)
+        features = self.fc_initial_embedding(features)
         features = F.relu(features)
         
         return features
@@ -202,10 +227,12 @@ class NodeFeatures(torch.nn.Module):
         original_node_features = node_features.detach().clone()
         
         epsilon = 1e-7
-        
+
+        # change to node_features.shape[2]
         for i in range(len(node_features)):
             # DOUBLE CHECK WITH DAS
             # intermediate_node_feature = self.FCNN_one(node_features[i].T)
+            # original_node_features[:, :, i, :]
             intermediate_node_feature = self.FCNN_one(original_node_features[i].T)
             
             other_nodes_indices = []
@@ -378,8 +405,10 @@ class Graph2Graph(torch.nn.Module):
         self.EdgeFeaturesConvolution = EdgeFeatures(c_in1, c_out1, c_out2)
         
     def forward(self, node_features, edge_index, edge_features):
-        node_features = self.NodeFeaturesConvolution
-        edge_features = self.EdgeFeaturesConvolution
+        print("node_features_shape: ", node_features.shape)
+        print("edge_features_shape: ", edge_features.shape)
+        node_features = self.NodeFeaturesConvolution(node_features, edge_index, edge_features)
+        edge_features = self.EdgeFeaturesConvolution(node_features, edge_index, edge_features)
         
         return node_features, edge_features
     
@@ -389,6 +418,22 @@ class Features_Set2Set():
         self.edge_s2s = Set2Set(initial_dim_out, 6, 3)
     
     def transform_then_concat(self, node_features, edge_index, edge_features):
+        '''
+        node_features = node_features.numpy()
+        edge_index = edge_index.numpy()
+        edge_features = edge_features.numpy()
+        '''
+
+        '''
+        print("node_features type: ", type(node_features))
+        print("edge_index type: ", type(edge_index))
+        print("edge_features type: ", type(edge_features))
+
+        print("node_features: ", node_features)
+        print("edge_index: ", edge_index)
+        print("edge_features: ", edge_features)
+        '''
+
         deepchem_graph = dc.feat.GraphData(node_features, edge_index, edge_features)
         dgl_graph = deepchem_graph.to_dgl_graph()
         node_features_transformed = self.node_s2s(dgl_graph, node_features)
@@ -425,18 +470,24 @@ class GraphNeuralNetwork(torch.nn.Module):
         self.features_set2set = Features_Set2Set(initial_dim_out)
         self.g2p_module = Graph2Property(initial_dim_out, g2p_dim_1, g2p_dim_2, g2p_dim_3, 1)
         
-    def forward(self, graph_instance, g2g_num=4):
+    def forward(self, X1, X2, X3, g2g_num=4):
+        '''
         node_features = graph_instance.node_features 
         edge_index = graph_instance.edge_index
         edge_features = graph_instance.edge_features
+        '''
+
+        node_features = X1
+        edge_index = X2
+        edge_features = X3
         
         node_features_updated = self.nodes_initial_embedding(node_features)
         edge_features_updated = self.edges_initial_embedding(edge_features)
         
         for i in range(g2g_num):
-            node_features_updated, edge_features_updated = self.g2g_module(node_features, edge_index, edge_features)
+            node_features_updated, edge_features_updated = self.g2g_module(node_features_updated, edge_index, edge_features_updated)
             
-        features_concatenated = Features_Set2Set(node_features_updated, edge_index, edge_features_updated)
+        features_concatenated = self.features_set2set.transform_then_concat(node_features_updated, edge_index, edge_features_updated)
         
         predicted_value = self.g2p_module(features_concatenated)
         
@@ -448,11 +499,11 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
     # print("after size")
     # print(size)
     loss_batch = []
-    for batch, (X, y) in enumerate(dataloader.dataset):
-        pred = model(X)
+    for batch, (X1, X2, X3, y) in enumerate(dataloader.dataset):
+        pred = model(X1.float(), X2.float(), X3.float())
         yReshaped = torch.Tensor([y]).reshape(1, 1, 1)
-        # print(yReshaped.shape)
-        # print("Prediction: %s, Actual value %s", pred, yReshaped)
+        print(yReshaped.shape)
+        print("Prediction: %s, Actual value %s", pred, yReshaped)
         loss = loss_fn(pred, yReshaped)
 
         # Backpropagation
@@ -469,8 +520,8 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
     val_loss_batch = []
 
     with torch.no_grad():
-        for batch, (X, y) in enumerate(dataloader2.dataset):
-            pred = model(X)
+        for batch, (X1, X2, X3, y) in enumerate(dataloader2.dataset):
+            pred = model(X1.float(), X2.float(), X3.float())
             yReshaped = torch.Tensor([y]).reshape(1, 1, 1)
             loss = loss_fn(pred, yReshaped)
       
@@ -499,6 +550,7 @@ def test_loop(dataloader, model, loss_fn):
 
 def runGraphNeuralNetwork():
     model = GraphNeuralNetwork()
+    model = model.float()
 
     learning_rate = 1e-3
     loss_fn = nn.MSELoss()
