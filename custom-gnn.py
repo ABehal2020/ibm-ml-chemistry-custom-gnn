@@ -74,7 +74,8 @@ def featurize_data():
 
     graph = []
     sol = []
-    for i in range(len(soldata)):
+    # for i in range(len(soldata)):
+    for i in range(100):
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
         if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance, "edge_features"):
             graph.append(graphInstance)
@@ -101,35 +102,15 @@ class CustomDataset(data.Dataset):
             graphInstanceEdgeIndex = self.transform(graphInstance.edge_index)
             graphInstanceEdgeFeatures = self.transform(graphInstance.edge_features)
 
+            # B = torch.reshape(A, (A.shape[1], A.shape[2]))
+            graphInstanceNodeFeatures = torch.reshape(graphInstanceNodeFeatures, (graphInstanceNodeFeatures.shape[1], graphInstanceNodeFeatures.shape[2]))
+            graphInstanceEdgeIndex = torch.reshape(graphInstanceEdgeIndex, (graphInstanceEdgeIndex.shape[1], graphInstanceEdgeIndex.shape[2]))
+            graphInstanceEdgeFeatures = torch.reshape(graphInstanceEdgeFeatures, (graphInstanceEdgeFeatures.shape[1], graphInstanceEdgeFeatures.shape[2]))
+
         if self.target_transform:
             solInstance = self.target_transform(solInstance)
 
         return graphInstanceNodeFeatures, graphInstanceEdgeIndex, graphInstanceEdgeFeatures, solInstance
-
-        '''
-        print("node_features type: ", type(graphInstance.node_features))
-        print("edge_index type: ", type(graphInstance.edge_index))
-        print("edge_features type: ", type(graphInstance.edge_features))
-
-        if self.transform:
-            try:
-                graphInstance = dc.feat.GraphData(self.transform(graphInstance.node_features), self.transform(graphInstance.edge_index), self.transform(graphInstance.edge_features))
-            except:
-                print("this is bad - let's investigate some more")
-                print("node_features type: ", type(graphInstance.node_features))
-                print("edge_index type: ", type(graphInstance.edge_index))
-                print("edge_features type: ", type(graphInstance.edge_features))
-                print("node_features: ", graphInstance.node_features)
-                print("edge_index: ", graphInstance.edge_index)
-                print("edge_features: ", graphInstance.edge_features)
-                print("investigation concluded")
-        if self.target_transform:
-            try:
-                solInstance = self.target_transform(solInstance)
-            except:
-                print("this is really bad - this shouldn't be an issue with a solInstance")
-        return graphInstance, solInstance
-        '''
 
 def train_val_test_split():
     graph, sol = featurize_data()
@@ -228,12 +209,10 @@ class NodeFeatures(torch.nn.Module):
         
         epsilon = 1e-7
 
-        # change to node_features.shape[2]
-        for i in range(len(node_features)):
+        for i in range(node_features.shape[1]):
             # DOUBLE CHECK WITH DAS
             # intermediate_node_feature = self.FCNN_one(node_features[i].T)
-            # original_node_features[:, :, i, :]
-            intermediate_node_feature = self.FCNN_one(original_node_features[i].T)
+            intermediate_node_feature = self.FCNN_one(original_node_features[:, i, :])
             
             other_nodes_indices = []
             other_edges_indices = []
@@ -249,12 +228,12 @@ class NodeFeatures(torch.nn.Module):
             print("intermediate_node_feature.size: ", intermediate_node_feature.size())
             '''
             
-            for j in range(len(edge_index[0])):
-                if edge_index[0][j] == i:
-                    other_nodes_indices.append(int(edge_index[1][j]))
+            for j in range(edge_index.shape[1]):
+                if edge_index[:][0][j] == i:
+                    other_nodes_indices.append(int(edge_index[:][1][j]))
                     other_edges_indices.append(j)
-                if edge_index[1][j] == i:
-                    other_nodes_indices.append(int(edge_index[0][j]))
+                if edge_index[:][1][j] == i:
+                    other_nodes_indices.append(int(edge_index[:][0][j]))
                     other_edges_indices.append(j)
             
             '''
@@ -265,8 +244,8 @@ class NodeFeatures(torch.nn.Module):
             
             for other_edge_index in other_edges_indices:
                 # print("SIGMOID ALERT TEST TEST TEST: ", sigmoidFunction(edge_features[other_edge_index]))
-                other_edges_numerators.append(sigmoidFunction(edge_features[other_edge_index]))
-                other_edges_denominator += sigmoidFunction(edge_features[other_edge_index])
+                other_edges_numerators.append(sigmoidFunction(edge_features[:][other_edge_index][:]))
+                other_edges_denominator += sigmoidFunction(edge_features[:][other_edge_index][:])
                 
             # print("other_edges_numerators: ", other_edges_numerators)
             # print("other_edges_denominator: ", other_edges_denominator)
@@ -275,7 +254,7 @@ class NodeFeatures(torch.nn.Module):
                 edge_hat = other_edge_numerator/other_edges_denominator
                 # DOUBLE CHECK WITH DAS
                 # other_node_updated = self.FCNN_two(node_features[other_node_index].T) 
-                other_node_updated = self.FCNN_two(original_node_features[other_node_index].T) 
+                other_node_updated = self.FCNN_two(original_node_features[:][other_node_index][:].T)
                 intermediate_node_feature += edge_hat * other_node_updated
                 
                 # print("edge_hat: ", edge_hat)
@@ -339,11 +318,11 @@ class EdgeFeatures(torch.nn.Module):
     def forward(self, node_features, edge_index, edge_features):
         original_edge_features = edge_features.detach().clone()
         
-        for i in range(len(edge_index[0])):
+        for i in range(edge_index.shape[1]):
             # summing node features involved in the given edge and transforming them
-            firstNodeIndex = int(edge_index[0][i])
-            secondNodeIndex = int(edge_index[1][i])
-            node_features_sum = node_features[firstNodeIndex] + node_features[secondNodeIndex]
+            firstNodeIndex = int(edge_index[:][0][i])
+            secondNodeIndex = int(edge_index[:][1][i])
+            node_features_sum = node_features[:][firstNodeIndex][:] + node_features[:][secondNodeIndex][:]
             intermediate_node_features = self.FCNN_one(node_features_sum.T)
             
             print("firstNodeIndex: ", firstNodeIndex)
@@ -358,13 +337,13 @@ class EdgeFeatures(torch.nn.Module):
             print("intermediate_node_features.size: ", intermediate_node_features.size())
             
             # transforming the features of the given edge 
-            intermediate_edge_feature = self.FCNN_two(edge_features[i].T)
+            intermediate_edge_feature = self.FCNN_two(edge_features[:][i][:].T)
             
             print("edge_features index: ", i)
-            print("edge_features: ", edge_features[i])
+            print("edge_features: ", edge_features[:][i][:])
             print("edge_features.size: ", edge_features[i].size())
-            print("edge_features.T: ", edge_features[i].T)
-            print("edge_features.T.size(): ", edge_features[i].T.size())
+            print("edge_features.T: ", edge_features[:][i][:].T)
+            print("edge_features.T.size(): ", edge_features[:][i][:].T.size())
             print("intermediate_edge_feature: ", intermediate_edge_feature)
             print("intermediate_edge_feature.size: ", intermediate_edge_feature.size())
             print("intermediate_edge_feature.size dim 0: ", intermediate_edge_feature.size(dim=0))
@@ -387,11 +366,11 @@ class EdgeFeatures(torch.nn.Module):
             
             print("intermediate_features: ", intermediate_features)
             print("intermediate_features.size: ", intermediate_features.size())
-            print("original_edge_features[i].T: ", original_edge_features[i].T)
-            print("calculated updated edge_features[i]: ", (original_edge_features[i].T + intermediate_features).T)
+            print("original_edge_features[i].T: ", original_edge_features[:][i][:].T)
+            print("calculated updated edge_features[i]: ", (original_edge_features[:][i][:].T + intermediate_features).T)
             
             # updating edge features
-            edge_features[i] = (original_edge_features[i].T + intermediate_features).T
+            edge_features[i] = (original_edge_features[:][i][:].T + intermediate_features).T
             
             print("actually updated edge_features[i]: ", edge_features[i])
             print("********** EDGE UPDATED SUCCESSFULLY ****************")
@@ -480,6 +459,10 @@ class GraphNeuralNetwork(torch.nn.Module):
         node_features = X1
         edge_index = X2
         edge_features = X3
+
+        print("node_features: ", node_features.shape)
+        print("edge_index: ", edge_index.shape)
+        print("edge_features: ", edge_features)
         
         node_features_updated = self.nodes_initial_embedding(node_features)
         edge_features_updated = self.edges_initial_embedding(edge_features)
