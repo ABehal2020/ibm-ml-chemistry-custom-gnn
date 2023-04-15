@@ -426,7 +426,7 @@ class Features_Set2Set():
         deepchem_graph_nodes = dc.feat.GraphData(node_features, edge_index, edge_features)
         dgl_graph_nodes = deepchem_graph_nodes.to_dgl_graph()
 
-        # CHECK WITH DAS - why is 1 x 48 being outputted with both node and edge features from set2set (shouldn't it be 1 x 24 for both)
+        # CHECK WITH DAS - ask what is 1 x 48 being outputted with both node and edge features from set2set - note: this is correct
         node_features_transformed = self.node_s2s(dgl_graph_nodes, torch.from_numpy(node_features))
 
         # CHECK WITH DAS to make sure this is an ok way to use set2set on edges
@@ -435,12 +435,32 @@ class Features_Set2Set():
 
         while (node_features.shape[0] > edge_features.shape[0]):
             edge_features = np.append(edge_features, np.array([np.zeros(edge_features.shape[1])]), axis=0)
-            edge_index = np.append(edge_index, np.array([[edge_index.shape[1], edge_index.shape[1]]]), axis=1)
+            try:
+                # edge_index = np.append(edge_index, np.array([[edge_index.shape[1], edge_index.shape[1]]]), axis=1)
+                edge_index = np.column_stack((edge_index, np.array([edge_index.shape[1], edge_index.shape[1]])))
+            except:
+                print("let's investigate further!")
+
+        if (edge_index.shape[1] % 2) == 1:
+            node_features = np.append(node_features, np.array([np.zeros(node_features.shape[1])]), axis=0)
+            edge_index = np.column_stack((edge_index, np.array([edge_index.shape[1], edge_index.shape[1]])))
+            edge_features = np.append(edge_features, np.array([np.zeros(edge_features.shape[1])]), axis=0)
 
         deepchem_graph_edges = dc.feat.GraphData(edge_features, edge_index, node_features)
         dgl_graph_edges = deepchem_graph_edges.to_dgl_graph()
 
-        edge_features_transformed = self.edge_s2s(dgl_graph_edges, torch.from_numpy(edge_features))
+        '''
+        try:
+            edge_features_transformed = self.edge_s2s(dgl_graph_edges, torch.from_numpy(edge_features))
+        except Exception as e:
+            print("node features data type: ", node_features.dtype)
+            print("edge index data type: ", edge_index.dtype)
+            print("edge features data type: ", edge_features.dtype)
+            print(e)
+            print("ok interesting!")
+        '''
+
+        edge_features_transformed = self.edge_s2s(dgl_graph_edges, torch.from_numpy(edge_features).to(torch.float32))
 
         # intermediate_node_feature = torch.reshape(intermediate_node_feature, (-1,))
         node_features_transformed = torch.reshape(node_features_transformed, (-1,))
@@ -514,9 +534,9 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
     loss_batch = []
     for batch, (X1, X2, X3, y) in enumerate(dataloader.dataset):
         pred = model(X1.float(), X2.float(), X3.float())
-        yReshaped = torch.Tensor([y]).reshape(1, 1, 1)
+        yReshaped = torch.Tensor([y])
         # print(yReshaped.shape)
-        print("Prediction: %s, Actual value %s", pred, yReshaped)
+        # print("Prediction: %s, Actual value %s", pred, yReshaped)
         loss = loss_fn(pred, yReshaped)
 
         # Backpropagation
@@ -535,7 +555,7 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
     with torch.no_grad():
         for batch, (X1, X2, X3, y) in enumerate(dataloader2.dataset):
             pred = model(X1.float(), X2.float(), X3.float())
-            yReshaped = torch.Tensor([y]).reshape(1, 1, 1)
+            yReshaped = torch.Tensor([y])
             loss = loss_fn(pred, yReshaped)
       
             val_loss_batch.append(loss.item())
@@ -598,7 +618,7 @@ def runGraphNeuralNetwork():
 
     test_data_loader, val_data_loader, train_data_loader = train_val_test_split()
 
-    epochs = 3
+    epochs = 20
     for t in range(epochs):
         print(f"Epoch {t + 1}\n-------------------------------")
         # we need to check to see if train_data and val_data is being shuffled before each epoch along with playing around with different initializations (and can do multiple reruns)
