@@ -405,25 +405,33 @@ class Features_Set2Set():
         edge_index = edge_index.detach().numpy().astype(int)
         edge_features = edge_features.detach().numpy()
 
+        # edge_index = edge_index[:, ::2]
+        # edge_features = edge_features[::2, :]
+
         deepchem_graph_nodes = dc.feat.GraphData(node_features, edge_index, edge_features)
         dgl_graph_nodes = deepchem_graph_nodes.to_dgl_graph()
 
+        # CHECK WITHI DAS: why is 1 x 48 being outputted with both node and edge features from set2set (shouldn't it be 1 x 24 for both)
         node_features_transformed = self.node_s2s(dgl_graph_nodes, torch.from_numpy(node_features))
 
+        # CHECK WITH DAS to make sure this is an ok way to use set2set on edges
         while (node_features.shape[0] < edge_features.shape[0]):
-            np.append(node_features, np.array([np.zeros(node_features.shape[1])]), axis=0)
+            node_features = np.append(node_features, np.array([np.zeros(node_features.shape[1])]), axis=0)
 
         while (node_features.shape[0] > edge_features.shape[0]):
-            np.append(edge_features, np.array([np.zeros(edge_features.shape[1])]), axis=0)
-            np.append(edge_index, np.array([[edge_index.shape[1], edge_index.shape[1]]]), axis=1)
+            edge_features = np.append(edge_features, np.array([np.zeros(edge_features.shape[1])]), axis=0)
+            edge_index = np.append(edge_index, np.array([[edge_index.shape[1], edge_index.shape[1]]]), axis=1)
 
         deepchem_graph_edges = dc.feat.GraphData(edge_features, edge_index, node_features)
         dgl_graph_edges = deepchem_graph_edges.to_dgl_graph()
 
-        # edge_features_transformed = self.edge_s2s(dgl_graph, torch.from_numpy(edge_features))
         edge_features_transformed = self.edge_s2s(dgl_graph_edges, torch.from_numpy(edge_features))
+
+        # intermediate_node_feature = torch.reshape(intermediate_node_feature, (-1,))
+        node_features_transformed = torch.reshape(node_features_transformed, (-1,))
+        edge_features_transformed = torch.reshape(edge_features_transformed, (-1,))
         
-        return torch.cat(node_features_transformed, edge_features_transformed)
+        return torch.cat((node_features_transformed, edge_features_transformed))
 
 class Graph2Property(torch.nn.Module):
     # c_in1 = 24, c_out1 = 256, c_out2 = 128, c_out3 = 64, c_out4 = 1
@@ -446,13 +454,13 @@ class Graph2Property(torch.nn.Module):
         return features
         
 class GraphNeuralNetwork(torch.nn.Module):
-    def __init__(self, nodes_initial_dim_in=30, edges_initial_dim_in=11, initial_dim_out=24, g2g_hidden_dim=256, g2p_dim_1=256, g2p_dim_2=128, g2p_dim_3=64):
+    def __init__(self, nodes_initial_dim_in=30, edges_initial_dim_in=11, initial_dim_out=24, g2g_input_dim=96, g2g_hidden_dim=256, g2p_dim_1=256, g2p_dim_2=128, g2p_dim_3=64):
         super(GraphNeuralNetwork, self).__init__()
         self.nodes_initial_embedding = InitialEmbedding(nodes_initial_dim_in, initial_dim_out)
         self.edges_initial_embedding = InitialEmbedding(edges_initial_dim_in, initial_dim_out)
         self.g2g_module = Graph2Graph(initial_dim_out, g2g_hidden_dim, initial_dim_out)
         self.features_set2set = Features_Set2Set(initial_dim_out)
-        self.g2p_module = Graph2Property(initial_dim_out, g2p_dim_1, g2p_dim_2, g2p_dim_3, 1)
+        self.g2p_module = Graph2Property(g2g_input_dim, g2p_dim_1, g2p_dim_2, g2p_dim_3, 1)
         
     def forward(self, X1, X2, X3, g2g_num=4):
         '''
