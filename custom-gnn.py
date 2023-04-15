@@ -30,6 +30,7 @@ def get_data():
     np.random.seed(0)
     random.seed(0)
 
+    '''
     warnings.filterwarnings("ignore")
     sns.set_context("notebook")
     sns.set_style(
@@ -50,6 +51,7 @@ def get_data():
     opener = urllib.request.build_opener()
     opener.addheaders = [('User-agent', 'Mozilla/5.0')]
     urllib.request.install_opener(opener)
+    '''
 
     # had to rehost because dataverse isn't reliable
     soldata = pd.read_csv(
