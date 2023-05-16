@@ -1,0 +1,36 @@
+Arguments: 
+  /Users/adityabehal/.nvm/versions/node/v14.8.0/bin/node /usr/local/Cellar/yarn/1.22.15/libexec/bin/yarn.js add kcachegrind
+
+PATH: 
+  /Users/adityabehal/.cabal/bin:/Users/adityabehal/.ghcup/bin:/Library/Frameworks/Python.framework/Versions/3.9/bin:/usr/local/opt/libpq/bin:/Users/adityabehal/.cargo/bin:/Users/adityabehal/opt/anaconda3/bin:/Users/adityabehal/opt/anaconda3/condabin:/Library/Frameworks/Python.framework/Versions/3.6/bin:/Users/adityabehal/.nvm/versions/node/v14.8.0/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Library/TeX/texbin:/usr/local/share/dotnet:/opt/X11/bin:~/.dotnet/tools:/Library/Apple/usr/bin:/opt/anaconda/anaconda3/bin:/opt/anaconda/anaconda3/condabin:/Users/adityabehal/bin:/Users/adityabehal/Downloads/ghc-9.2.5-x86_64-apple-darwin/bin:/Users/adityabehal/DrMemory-MacOS-2.3.166/bin64/drmemory
+
+Yarn version: 
+  1.22.15
+
+Node version: 
+  14.8.0
+
+Platform: 
+  darwin x64
+
+Trace: 
+  Error: https://registry.yarnpkg.com/kcachegrind: Not found
+      at Request.params.callback [as _callback] (/usr/local/Cellar/yarn/1.22.15/libexec/lib/cli.js:67031:18)
+      at Request.self.callback (/usr/local/Cellar/yarn/1.22.15/libexec/lib/cli.js:140885:22)
+      at Request.emit (events.js:314:20)
+      at Request.<anonymous> (/usr/local/Cellar/yarn/1.22.15/libexec/lib/cli.js:141857:10)
+      at Request.emit (events.js:314:20)
+      at IncomingMessage.<anonymous> (/usr/local/Cellar/yarn/1.22.15/libexec/lib/cli.js:141779:12)
+      at Object.onceWrapper (events.js:420:28)
+      at IncomingMessage.emit (events.js:326:22)
+      at endReadableNT (_stream_readable.js:1244:12)
+      at processTicksAndRejections (internal/process/task_queues.js:80:21)
+
+npm manifest: 
+  No manifest
+
+yarn manifest: 
+  No manifest
+
+Lockfile: 
+  No lockfile

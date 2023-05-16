@@ -77,12 +77,18 @@ def featurize_data():
     graph = []
     sol = []
 
+    currentNumInstances = 0
+    maxInstances = 400
+
     # for i in range(100):
     for i in range(len(soldata)):
+        if currentNumInstances == maxInstances:
+            break
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
         if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance, "edge_features"):
             graph.append(graphInstance)
             sol.append(soldata.Solubility[i])
+            currentNumInstances += 1
 
     return graph, sol
 
@@ -123,7 +129,7 @@ def train_val_test_split():
     cores = multiprocessing.cpu_count() # Count the number of cores in a computer
     print("cores: ", cores)
 
-    numWorkersToUse = 8 # 16 cores on my machine so we'll use half of them
+    numWorkersToUse = 0 # 16 cores on my machine - using 8 has worked well in the past
 
     # batch_size=1 was original default - 100 was used in bondnet paper
     # set num_workers=cores for best performance
@@ -422,8 +428,8 @@ class Features_Set2Set():
 
         # edge_index = edge_index[:, ::2]
         # edge_features = edge_features[::2, :]
-
         deepchem_graph_nodes = dc.feat.GraphData(node_features, edge_index, edge_features)
+        # deepchem_graph_nodes = dc.feat.graph_data(node_features, edge_index, edge_features)
         dgl_graph_nodes = deepchem_graph_nodes.to_dgl_graph()
 
         # CHECK WITH DAS - ask what is 1 x 48 being outputted with both node and edge features from set2set - note: this is correct
@@ -447,6 +453,7 @@ class Features_Set2Set():
             edge_features = np.append(edge_features, np.array([np.zeros(edge_features.shape[1])]), axis=0)
 
         deepchem_graph_edges = dc.feat.GraphData(edge_features, edge_index, node_features)
+        # deepchem_graph_edges = dc.feat.graph_data(edge_features, edge_index, node_features)
         dgl_graph_edges = deepchem_graph_edges.to_dgl_graph()
 
         '''
@@ -595,8 +602,9 @@ def plotLearningCurves(train_loss, val_loss):
 
     plt.figure(figsize=(10, 5))
     plt.title("Training and Validation Loss")
-    plt.plot(val_loss, label="val")
-    plt.plot(train_loss, label="train")
+    plt.xticks(range(1, len(train_loss) + 1))
+    plt.plot([i + 1 for i in range(len(train_loss))], val_loss, label="val")
+    plt.plot([i + 1 for i in range(len(train_loss))], train_loss, label="train")
     plt.xlabel("iterations")
     plt.ylabel("Loss")
     plt.legend()
@@ -618,7 +626,7 @@ def runGraphNeuralNetwork():
 
     test_data_loader, val_data_loader, train_data_loader = train_val_test_split()
 
-    epochs = 20
+    epochs = 3
     for t in range(epochs):
         print(f"Epoch {t + 1}\n-------------------------------")
         # we need to check to see if train_data and val_data is being shuffled before each epoch along with playing around with different initializations (and can do multiple reruns)
