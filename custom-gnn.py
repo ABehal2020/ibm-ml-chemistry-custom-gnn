@@ -20,7 +20,7 @@ import torch.nn.functional as F
 from six.moves import urllib
 import deepchem as dc
 import random
-from dgl.nn import Set2Set
+from torch_geometric.nn.aggr import Set2Set
 import multiprocessing
 from torchvision.transforms import Compose, ToTensor
 
@@ -77,18 +77,18 @@ def featurize_data():
     graph = []
     sol = []
 
-    currentNumInstances = 0
-    maxInstances = 400
+    # currentNumInstances = 0
+    # maxInstances = 400
 
     # for i in range(100):
     for i in range(len(soldata)):
-        if currentNumInstances == maxInstances:
-            break
+        # if currentNumInstances == maxInstances:
+            # break
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
         if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance, "edge_features"):
             graph.append(graphInstance)
             sol.append(soldata.Solubility[i])
-            currentNumInstances += 1
+            # currentNumInstances += 1
 
     return graph, sol
 
@@ -414,65 +414,24 @@ class Graph2Graph(torch.nn.Module):
     
 class Features_Set2Set():
     def __init__(self, initial_dim_out):
-        self.node_s2s = Set2Set(initial_dim_out, 6, 3)
-        self.edge_s2s = Set2Set(initial_dim_out, 6, 3)
+        self.node_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
+        self.edge_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
     
-    def transform_then_concat(self, node_features, edge_index, edge_features):
-        node_features = torch.reshape(node_features, (node_features.shape[1], node_features.shape[2]))
-        edge_index = torch.reshape(edge_index, (edge_index.shape[1], edge_index.shape[2]))
-        edge_features = torch.reshape(edge_features, (edge_features.shape[1], edge_features.shape[2]))
+    def transform_then_concat(self, node_features, edge_features):
+        # RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [1, 24]], which is output 0 of AsStridedBackward0, is at version 8; expected version 7 instead. Hint: the backtrace further above shows the operation that failed to compute its gradient. The variable in question was changed in there or anywhere later. Good luck!
 
-        node_features = node_features.detach().numpy()
-        edge_index = edge_index.detach().numpy().astype(int)
-        edge_features = edge_features.detach().numpy()
+        node_features_input = node_features.detach().clone()
+        edge_features_input = edge_features.detach().clone()
 
-        # edge_index = edge_index[:, ::2]
-        # edge_features = edge_features[::2, :]
-        deepchem_graph_nodes = dc.feat.GraphData(node_features, edge_index, edge_features)
-        # deepchem_graph_nodes = dc.feat.graph_data(node_features, edge_index, edge_features)
-        dgl_graph_nodes = deepchem_graph_nodes.to_dgl_graph()
+        node_features_input = torch.reshape(node_features_input, (node_features_input.shape[1], node_features_input.shape[2]))
+        edge_features_input = torch.reshape(edge_features_input, (edge_features_input.shape[1], edge_features_input.shape[2]))
 
-        # CHECK WITH DAS - ask what is 1 x 48 being outputted with both node and edge features from set2set - note: this is correct
-        node_features_transformed = self.node_s2s(dgl_graph_nodes, torch.from_numpy(node_features))
+        node_features_transformed = self.node_s2s(node_features_input)
+        edge_features_transformed = self.edge_s2s(edge_features_input)
 
-        # CHECK WITH DAS to make sure this is an ok way to use set2set on edges
-        while (node_features.shape[0] < edge_features.shape[0]):
-            node_features = np.append(node_features, np.array([np.zeros(node_features.shape[1])]), axis=0)
-
-        while (node_features.shape[0] > edge_features.shape[0]):
-            edge_features = np.append(edge_features, np.array([np.zeros(edge_features.shape[1])]), axis=0)
-            try:
-                # edge_index = np.append(edge_index, np.array([[edge_index.shape[1], edge_index.shape[1]]]), axis=1)
-                edge_index = np.column_stack((edge_index, np.array([edge_index.shape[1], edge_index.shape[1]])))
-            except:
-                print("let's investigate further!")
-
-        if (edge_index.shape[1] % 2) == 1:
-            node_features = np.append(node_features, np.array([np.zeros(node_features.shape[1])]), axis=0)
-            edge_index = np.column_stack((edge_index, np.array([edge_index.shape[1], edge_index.shape[1]])))
-            edge_features = np.append(edge_features, np.array([np.zeros(edge_features.shape[1])]), axis=0)
-
-        deepchem_graph_edges = dc.feat.GraphData(edge_features, edge_index, node_features)
-        # deepchem_graph_edges = dc.feat.graph_data(edge_features, edge_index, node_features)
-        dgl_graph_edges = deepchem_graph_edges.to_dgl_graph()
-
-        '''
-        try:
-            edge_features_transformed = self.edge_s2s(dgl_graph_edges, torch.from_numpy(edge_features))
-        except Exception as e:
-            print("node features data type: ", node_features.dtype)
-            print("edge index data type: ", edge_index.dtype)
-            print("edge features data type: ", edge_features.dtype)
-            print(e)
-            print("ok interesting!")
-        '''
-
-        edge_features_transformed = self.edge_s2s(dgl_graph_edges, torch.from_numpy(edge_features).to(torch.float32))
-
-        # intermediate_node_feature = torch.reshape(intermediate_node_feature, (-1,))
         node_features_transformed = torch.reshape(node_features_transformed, (-1,))
         edge_features_transformed = torch.reshape(edge_features_transformed, (-1,))
-        
+
         return torch.cat((node_features_transformed, edge_features_transformed))
 
 class Graph2Property(torch.nn.Module):
@@ -527,7 +486,7 @@ class GraphNeuralNetwork(torch.nn.Module):
         for i in range(g2g_num):
             node_features_updated, edge_features_updated = self.g2g_module(node_features_updated, edge_index, edge_features_updated)
             
-        features_concatenated = self.features_set2set.transform_then_concat(node_features_updated, edge_index, edge_features_updated)
+        features_concatenated = self.features_set2set.transform_then_concat(node_features_updated, edge_features_updated)
         
         predicted_value = self.g2p_module(features_concatenated)
         
@@ -626,7 +585,7 @@ def runGraphNeuralNetwork():
 
     test_data_loader, val_data_loader, train_data_loader = train_val_test_split()
 
-    epochs = 3
+    epochs = 20
     for t in range(epochs):
         print(f"Epoch {t + 1}\n-------------------------------")
         # we need to check to see if train_data and val_data is being shuffled before each epoch along with playing around with different initializations (and can do multiple reruns)
@@ -642,6 +601,7 @@ def runGraphNeuralNetwork():
     plotLearningCurves(train_loss, val_loss)
 
 def main():
+    torch.autograd.set_detect_anomaly(True)
     runGraphNeuralNetwork()
 
 if __name__ == '__main__':
