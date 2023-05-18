@@ -111,7 +111,7 @@ def train_val_test_split():
     cores = multiprocessing.cpu_count()  # Count the number of cores in a computer (includes hyperthreading)
     print("cores: ", cores)
 
-    numWorkersToUse = cores/2  # 16 cores (with hyperthreading) on my machine - using 8 has worked well in the past
+    numWorkersToUse = int(cores/2)  # 16 cores (with hyperthreading) on my machine - using 8 has worked well in the past
 
     # batch_size=1 was original default - 100 was used in bondnet paper
     # set num_workers=cores for best performance
