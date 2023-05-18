@@ -25,41 +25,15 @@ from torch_geometric.nn.aggr import Set2Set
 import multiprocessing
 from torchvision.transforms import Compose, ToTensor
 
+
 def get_data():
-    torch.manual_seed(0)
-    torch.use_deterministic_algorithms(True)
-    np.random.seed(0)
-    random.seed(0)
-
-    '''
-    warnings.filterwarnings("ignore")
-    sns.set_context("notebook")
-    sns.set_style(
-        "dark",
-        {
-            "xtick.bottom": True,
-            "ytick.left": True,
-            "xtick.color": "#666666",
-            "ytick.color": "#666666",
-            "axes.edgecolor": "#666666",
-            "axes.linewidth": 0.8,
-            "figure.dpi": 300,
-        },
-    )
-    color_cycle = ["#1BBC9B", "#F06060", "#5C4B51", "#F3B562", "#6e5687"]
-    mpl.rcParams["axes.prop_cycle"] = mpl.cycler(color=color_cycle)
-
-    opener = urllib.request.build_opener()
-    opener.addheaders = [('User-agent', 'Mozilla/5.0')]
-    urllib.request.install_opener(opener)
-    '''
-
     # had to rehost because dataverse isn't reliable
     soldata = pd.read_csv(
         "https://github.com/whitead/dmol-book/raw/main/data/curated-solubility-dataset.csv"
     )
 
     return soldata
+
 
 def gen_smiles2graph(smiles):
     """Argument for the RD2NX function should be a valid SMILES sequence
@@ -68,6 +42,7 @@ def gen_smiles2graph(smiles):
     featurizer = dc.feat.MolGraphConvFeaturizer(use_edges=True)
     out = featurizer.featurize(smiles)
     return out[0]
+
 
 def featurize_data():
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -84,14 +59,16 @@ def featurize_data():
     # for i in range(100):
     for i in range(len(soldata)):
         # if currentNumInstances == maxInstances:
-            # break
+        # break
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
-        if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance, "edge_features"):
+        if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance,
+                                                                                                        "edge_features"):
             graph.append(graphInstance)
             sol.append(soldata.Solubility[i])
             # currentNumInstances += 1
 
     return graph, sol
+
 
 class CustomDataset(data.Dataset):
     def __init__(self, graphAll, solAll, transform=None, target_transform=None):
@@ -113,29 +90,33 @@ class CustomDataset(data.Dataset):
             graphInstanceEdgeFeatures = self.transform(graphInstance.edge_features)
 
             # B = torch.reshape(A, (A.shape[1], A.shape[2]))
-            graphInstanceNodeFeatures = torch.reshape(graphInstanceNodeFeatures, (graphInstanceNodeFeatures.shape[1], graphInstanceNodeFeatures.shape[2]))
-            graphInstanceEdgeIndex = torch.reshape(graphInstanceEdgeIndex, (graphInstanceEdgeIndex.shape[1], graphInstanceEdgeIndex.shape[2]))
-            graphInstanceEdgeFeatures = torch.reshape(graphInstanceEdgeFeatures, (graphInstanceEdgeFeatures.shape[1], graphInstanceEdgeFeatures.shape[2]))
+            graphInstanceNodeFeatures = torch.reshape(graphInstanceNodeFeatures, (
+            graphInstanceNodeFeatures.shape[1], graphInstanceNodeFeatures.shape[2]))
+            graphInstanceEdgeIndex = torch.reshape(graphInstanceEdgeIndex,
+                                                   (graphInstanceEdgeIndex.shape[1], graphInstanceEdgeIndex.shape[2]))
+            graphInstanceEdgeFeatures = torch.reshape(graphInstanceEdgeFeatures, (
+            graphInstanceEdgeFeatures.shape[1], graphInstanceEdgeFeatures.shape[2]))
 
         if self.target_transform:
             solInstance = self.target_transform(solInstance)
 
         return graphInstanceNodeFeatures, graphInstanceEdgeIndex, graphInstanceEdgeFeatures, solInstance
 
+
 def train_val_test_split():
     graph, sol = featurize_data()
 
     dataset = CustomDataset(graphAll=graph, solAll=sol, transform=Compose([ToTensor()]))
 
-    cores = multiprocessing.cpu_count() # Count the number of cores in a computer
+    cores = multiprocessing.cpu_count()  # Count the number of cores in a computer (includes hyperthreading)
     print("cores: ", cores)
 
-    numWorkersToUse = 0 # 16 cores on my machine - using 8 has worked well in the past
+    numWorkersToUse = cores/2  # 16 cores (with hyperthreading) on my machine - using 8 has worked well in the past
 
     # batch_size=1 was original default - 100 was used in bondnet paper
     # set num_workers=cores for best performance
     dataloader = data.DataLoader(dataset, batch_size=1,
-                            shuffle=True, num_workers=numWorkersToUse)
+                                 shuffle=True, num_workers=numWorkersToUse)
     # print(len(dataloader))
     # print(type(dataloader))
 
@@ -155,7 +136,7 @@ def train_val_test_split():
     print(val_data_size)
     print(train_data_size)
 
-    test_data, val_data, train_data = data.random_split(dataloader, [test_data_size, val_data_size, train_data_size], generator=torch.Generator().manual_seed(0))
+    test_data, val_data, train_data = data.random_split(dataloader, [test_data_size, val_data_size, train_data_size])
 
     # set num_workers=cores for best performance
     test_data_loader = data.DataLoader(test_data, batch_size=1, shuffle=True, num_workers=numWorkersToUse)
@@ -168,6 +149,7 @@ def train_val_test_split():
 
     return test_data_loader, val_data_loader, train_data_loader
 
+
 # create "zeroth" FCNN with 1 fully connected layer
 # condense node features from 30 to 24
 # dilate edge features from 11 to 24
@@ -175,25 +157,23 @@ def train_val_test_split():
 class InitialEmbedding(torch.nn.Module):
     def __init__(self, c_in, c_out):
         super().__init__()
-        torch.manual_seed(0)
         self.fc_initial_embedding = nn.Linear(c_in, c_out)
-    
+
     def forward(self, features):
         features = self.fc_initial_embedding(features)
         features = F.relu(features)
-        
+
         return features
+
 
 # neural network with two fully connected layers
 class FCNN(torch.nn.Module):
     # c_in1 = 24, c_out1 = 256, c_out2 = 24
     def __init__(self, c_in1, c_out1, c_out2):
         super().__init__()
-        torch.manual_seed(0)
         self.fc1 = nn.Linear(c_in1, c_out1)
-        torch.manual_seed(0)
         self.fc2 = nn.Linear(c_out1, c_out2)
-    
+
     def forward(self, features):
         # print("input 2 layer FCNN features: ", features)
         features = self.fc1(features)
@@ -201,12 +181,13 @@ class FCNN(torch.nn.Module):
         features = F.relu(features)
         # print("after ReLu updated features: ", features)
         features = self.fc2(features)
-        
+
         # print("after 2 linear layers updated features: ", features)
-        
+
         return features
 
-# implementation of equation 5 in bondnet paper 
+
+# implementation of equation 5 in bondnet paper
 # https://pubs.rsc.org/en/content/articlepdf/2021/sc/d0sc05251e
 class NodeFeatures(torch.nn.Module):
     # c_in1 = 24, c_out1 = 24, c_out2 = 24
@@ -215,33 +196,33 @@ class NodeFeatures(torch.nn.Module):
         # self.fc_initial_embedding = InitialEmbedding(c_in=30, c_out=24)
         self.FCNN_one = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
         self.FCNN_two = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
-        
+
     def forward(self, node_features, edge_index, edge_features):
         sigmoidFunction = torch.nn.Sigmoid()
-        
+
         original_node_features = node_features.detach().clone()
-        
+
         epsilon = 1e-7
 
         for i in range(node_features.shape[1]):
             # DOUBLE CHECK WITH DAS
             # intermediate_node_feature = self.FCNN_one(node_features[i].T)
             intermediate_node_feature = self.FCNN_one(original_node_features[0][i])
-            
+
             other_nodes_indices = []
             other_edges_indices = []
-            
+
             other_edges_numerators = []
             other_edges_denominator = epsilon
-            
+
             '''
             print("node_features[i].T: ", node_features[i].T)
             print("node_features[i].T.size: ", node_features[i].T.size())
-            
+
             print("intermediate_node_feature: ", intermediate_node_feature)
             print("intermediate_node_feature.size: ", intermediate_node_feature.size())
             '''
-            
+
             for j in range(edge_index.shape[1]):
                 if edge_index[0][0][j] == i:
                     other_nodes_indices.append(int(edge_index[0][1][j]))
@@ -249,76 +230,50 @@ class NodeFeatures(torch.nn.Module):
                 if edge_index[0][1][j] == i:
                     other_nodes_indices.append(int(edge_index[0][0][j]))
                     other_edges_indices.append(j)
-            
-            '''
-            print("current node index: ", i)
-            print("other_nodes_indices: ", other_nodes_indices)
-            print("other_edges_indices: ", other_edges_indices)
-            '''
-            
+
             for other_edge_index in other_edges_indices:
                 # print("SIGMOID ALERT TEST TEST TEST: ", sigmoidFunction(edge_features[other_edge_index]))
                 other_edges_numerators.append(sigmoidFunction(edge_features[0][other_edge_index]))
                 other_edges_denominator += sigmoidFunction(edge_features[0][other_edge_index])
-                
+
             # print("other_edges_numerators: ", other_edges_numerators)
             # print("other_edges_denominator: ", other_edges_denominator)
-            
+
             for other_edge_numerator, other_node_index in zip(other_edges_numerators, other_nodes_indices):
-                edge_hat = other_edge_numerator/other_edges_denominator
+                edge_hat = other_edge_numerator / other_edges_denominator
                 # DOUBLE CHECK WITH DAS
-                # other_node_updated = self.FCNN_two(node_features[other_node_index].T) 
+                # other_node_updated = self.FCNN_two(node_features[other_node_index].T)
                 other_node_updated = self.FCNN_two(original_node_features[0][other_node_index].T)
                 intermediate_node_feature += edge_hat * other_node_updated
-                
+
                 # print("edge_hat: ", edge_hat)
-                '''
-                print("node_features[other_node_index].T: ", node_features[other_node_index].T)
-                print("node_features[other_node_index].T.size: ", node_features[other_node_index].T.size())
-                print("other_node_updated: ", other_node_updated)
-                print("other_node_updated.size: ", other_node_updated.size())
-                '''
-                
+
             # print("intermediate_node_feature: ", intermediate_node_feature)
             # print("intermediate_node_feature.size: ", intermediate_node_feature.size())
-                
-            '''
-            print("reLuOutput: ", F.relu(intermediate_node_feature))
-            print("reLuOutput.size: ", F.relu(intermediate_node_feature).size())
-            print("original_node_features[i].T", original_node_features[i].T)
-            print("original_node_features[i].T.size", original_node_features[i].T.size())
-            print("calculated updated node_features[i]: ", (original_node_features[i].T + F.relu(intermediate_node_feature)).T)
-            print("calculated updated node_features[i].size(): ", (original_node_features[i].T + F.relu(intermediate_node_feature)).T.size())
-            '''
-            
+
             # UPDATE TO INCLUDE THIS AT SOME POINT
             # intermediate_node_feature --> batch normalization --> drop out --> then ReLu
             # should I use batch norm 1D and what should my feature size be at this point?
-            '''
-            batchNorm1dLayer = nn.BatchNorm1d(intermediate_node_feature.size(dim=0))
-            dropoutLayer = nn.Dropout(p=0.1)
-            
-            intermediate_node_feature = batchNorm1dLayer(torch.reshape(intermediate_node_feature, (1, intermediate_node_feature.size(dim=0))))
-            intermediate_node_feature = torch.reshape(intermediate_node_feature, (-1,))
-            intermediate_node_feature = dropoutLayer(intermediate_node_feature)
-            '''
-            
+
             instanceNorm1dLayer = nn.InstanceNorm1d(intermediate_node_feature.size(dim=0))
             dropoutLayer = nn.Dropout(p=0.1)
-            
-            intermediate_node_feature = instanceNorm1dLayer(torch.reshape(intermediate_node_feature, (1, intermediate_node_feature.size(dim=0))))
+
+            intermediate_node_feature = instanceNorm1dLayer(
+                torch.reshape(intermediate_node_feature, (1, intermediate_node_feature.size(dim=0))))
             intermediate_node_feature = torch.reshape(intermediate_node_feature, (-1,))
             intermediate_node_feature = dropoutLayer(intermediate_node_feature)
-            
+
             # node_features[i] = F.relu(intermediate_node_feature).T
-            node_features[0][i] = ((original_node_features[0][i].T + F.relu(intermediate_node_feature)).T).detach().clone()
-            
+            node_features[0][i] = (
+                (original_node_features[0][i].T + F.relu(intermediate_node_feature)).T).detach().clone()
+
             # print("actually updated node_features[i]: ", node_features[0][i])
             # print("actually updated node_features[i].size(): ", node_features[0][i].size())
             # print("********** NODE UPDATED SUCCESSFULLY ****************")
 
         return node_features
-        
+
+
 # implementation of equation 4 in bondnet paper
 # https://pubs.rsc.org/en/content/articlepdf/2021/sc/d0sc05251e
 class EdgeFeatures(torch.nn.Module):
@@ -328,10 +283,10 @@ class EdgeFeatures(torch.nn.Module):
         # self.fc_initial_embedding = InitialEmbedding(c_in=11, c_out=24)
         self.FCNN_one = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
         self.FCNN_two = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
-        
+
     def forward(self, node_features, edge_index, edge_features):
         original_edge_features = edge_features.detach().clone()
-        
+
         for i in range(edge_index.shape[1]):
             # summing node features involved in the given edge and transforming them
             firstNodeIndex = int(edge_index[0][0][i])
@@ -339,85 +294,52 @@ class EdgeFeatures(torch.nn.Module):
             node_features_sum = node_features[0][firstNodeIndex] + node_features[0][secondNodeIndex]
             intermediate_node_features = self.FCNN_one(node_features_sum.T)
 
-            '''
-            print("firstNodeIndex: ", firstNodeIndex)
-            print("secondNodeIndex: ", secondNodeIndex)
-            print("node_features[firstNodeIndex]: ", node_features[0][firstNodeIndex])
-            print("node_features[secondNodeIndex]: ", node_features[0][secondNodeIndex])
-            print("node_features_sum: ", node_features_sum)
-            print("node_features_sum.size: ", node_features_sum.size())
-            print("node_features_sum.T: ", node_features_sum.T)
-            print("node_features_sum.T.size: ", node_features_sum.T.size())
-            print("intermediate_node_features: ", intermediate_node_features)
-            print("intermediate_node_features.size: ", intermediate_node_features.size())
-            '''
-            
-            # transforming the features of the given edge 
+            # transforming the features of the given edge
             intermediate_edge_feature = self.FCNN_two(edge_features[0][i].T)
 
-            '''
-            print("edge_features index: ", i)
-            print("edge_features: ", edge_features[0][i])
-            print("edge_features.size: ", edge_features[0][i].size())
-            print("edge_features.T: ", edge_features[0][i].T)
-            print("edge_features.T.size(): ", edge_features[0][i].T.size())
-            print("intermediate_edge_feature: ", intermediate_edge_feature)
-            print("intermediate_edge_feature.size: ", intermediate_edge_feature.size())
-            print("intermediate_edge_feature.size dim 0: ", intermediate_edge_feature.size(dim=0))
-            '''
-
             # merging node features with features of the given edge
-            
+
             # UPDATE TO INCLUDE THIS AT SOME POINT
             # intermediate_node_features + intermediate_edge_feature --> batch normalization --> drop out --> then ReLu
-            
+
             intermediate_features_relu_input = intermediate_node_features + intermediate_edge_feature
-            
+
             instanceNorm1dLayer = nn.InstanceNorm1d(intermediate_features_relu_input.size(dim=0))
             dropoutLayer = nn.Dropout(p=0.1)
-            
-            intermediate_features_relu_input = instanceNorm1dLayer(torch.reshape(intermediate_features_relu_input, (1, intermediate_features_relu_input.size(dim=0))))
-            intermediate_features_relu_input = torch.reshape(intermediate_features_relu_input, (-1,))                                                              
-            intermediate_features_relu_input = dropoutLayer(intermediate_features_relu_input)
-            
-            intermediate_features = F.relu(intermediate_features_relu_input)
 
-            '''
-            print("intermediate_features: ", intermediate_features)
-            print("intermediate_features.size: ", intermediate_features.size())
-            print("original_edge_features[i].T: ", original_edge_features[0][i].T)
-            print("calculated updated edge_features[i]: ", (original_edge_features[0][i].T + intermediate_features).T)
-            '''
+            intermediate_features_relu_input = instanceNorm1dLayer(
+                torch.reshape(intermediate_features_relu_input, (1, intermediate_features_relu_input.size(dim=0))))
+            intermediate_features_relu_input = torch.reshape(intermediate_features_relu_input, (-1,))
+            intermediate_features_relu_input = dropoutLayer(intermediate_features_relu_input)
+
+            intermediate_features = F.relu(intermediate_features_relu_input)
 
             # updating edge features
             edge_features[0][i] = ((original_edge_features[0][i].T + intermediate_features).T).detach().clone()
 
-            '''
-            print("actually updated edge_features[i]: ", edge_features[0][i])
-            print("********** EDGE UPDATED SUCCESSFULLY ****************")
-            '''
-
         return edge_features
-    
+
+
 class Graph2Graph(torch.nn.Module):
     def __init__(self, c_in1, c_out1, c_out2):
         super().__init__()
         self.NodeFeaturesConvolution = NodeFeatures(c_in1, c_out1, c_out2)
         self.EdgeFeaturesConvolution = EdgeFeatures(c_in1, c_out1, c_out2)
-        
+
     def forward(self, node_features, edge_index, edge_features):
         # print("node_features_shape: ", node_features.shape)
         # print("edge_features_shape: ", edge_features.shape)
         node_features = self.NodeFeaturesConvolution(node_features, edge_index, edge_features)
         edge_features = self.EdgeFeaturesConvolution(node_features, edge_index, edge_features)
-        
+
         return node_features, edge_features
-    
+
+
 class Features_Set2Set():
     def __init__(self, initial_dim_out):
         self.node_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
         self.edge_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
-    
+
     def transform_then_concat(self, node_features, edge_features):
         # RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [1, 24]], which is output 0 of AsStridedBackward0, is at version 8; expected version 7 instead. Hint: the backtrace further above shows the operation that failed to compute its gradient. The variable in question was changed in there or anywhere later. Good luck!
         # error above occurs if node and edge input features for Set2Set are not copied first
@@ -425,8 +347,10 @@ class Features_Set2Set():
         node_features_input = node_features.detach().clone()
         edge_features_input = edge_features.detach().clone()
 
-        node_features_input = torch.reshape(node_features_input, (node_features_input.shape[1], node_features_input.shape[2]))
-        edge_features_input = torch.reshape(edge_features_input, (edge_features_input.shape[1], edge_features_input.shape[2]))
+        node_features_input = torch.reshape(node_features_input,
+                                            (node_features_input.shape[1], node_features_input.shape[2]))
+        edge_features_input = torch.reshape(edge_features_input,
+                                            (edge_features_input.shape[1], edge_features_input.shape[2]))
 
         node_features_transformed = self.node_s2s(node_features_input)
         edge_features_transformed = self.edge_s2s(edge_features_input)
@@ -437,6 +361,7 @@ class Features_Set2Set():
         concatenated_features = torch.cat((node_features_transformed, edge_features_transformed))
 
         return concatenated_features
+
 
 class Graph2Property(torch.nn.Module):
     # c_in1 = 24, c_out1 = 256, c_out2 = 128, c_out3 = 64, c_out4 = 1
@@ -457,9 +382,11 @@ class Graph2Property(torch.nn.Module):
         features = self.fc4(features)
 
         return features
-        
+
+
 class GraphNeuralNetwork(torch.nn.Module):
-    def __init__(self, nodes_initial_dim_in=30, edges_initial_dim_in=11, initial_dim_out=24, g2g_input_dim=96, g2g_hidden_dim=256, g2p_dim_1=256, g2p_dim_2=128, g2p_dim_3=64):
+    def __init__(self, nodes_initial_dim_in=30, edges_initial_dim_in=11, initial_dim_out=24, g2g_input_dim=96,
+                 g2g_hidden_dim=256, g2p_dim_1=256, g2p_dim_2=128, g2p_dim_3=64):
         super(GraphNeuralNetwork, self).__init__()
         self.nodes_initial_embedding = InitialEmbedding(nodes_initial_dim_in, initial_dim_out)
         self.edges_initial_embedding = InitialEmbedding(edges_initial_dim_in, initial_dim_out)
@@ -468,34 +395,42 @@ class GraphNeuralNetwork(torch.nn.Module):
         self.g2p_module = Graph2Property(g2g_input_dim, g2p_dim_1, g2p_dim_2, g2p_dim_3, 1)
 
     # g2g_num's default should be 4, can be set to 1 for memory debugging purposes
-    def forward(self, X1, X2, X3, g2g_num=1):
-        '''
-        node_features = graph_instance.node_features 
-        edge_index = graph_instance.edge_index
-        edge_features = graph_instance.edge_features
-        '''
-
+    def forward(self, X1, X2, X3, g2g_num=4):
         node_features = X1
         edge_index = X2
         edge_features = X3
 
-        '''
-        print("node_features: ", node_features.shape)
-        print("edge_index: ", edge_index.shape)
-        print("edge_features: ", edge_features)
-        '''
-        
         node_features_updated = self.nodes_initial_embedding(node_features)
         edge_features_updated = self.edges_initial_embedding(edge_features)
-        
+
         for i in range(g2g_num):
-            node_features_updated, edge_features_updated = self.g2g_module(node_features_updated, edge_index, edge_features_updated)
-            
-        features_concatenated = self.features_set2set.transform_then_concat(node_features_updated, edge_features_updated)
-        
+            node_features_updated, edge_features_updated = self.g2g_module(node_features_updated, edge_index,
+                                                                           edge_features_updated)
+
+        features_concatenated = self.features_set2set.transform_then_concat(node_features_updated,
+                                                                            edge_features_updated)
+
         predicted_value = self.g2p_module(features_concatenated)
-        
+
         return predicted_value
+
+# adapted from https://stackoverflow.com/questions/71998978/early-stopping-in-pytorch
+class EarlyStopper:
+    def __init__(self, patience=150, min_delta=0.0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.min_validation_loss = np.inf
+
+    def early_stop(self, validation_loss):
+        if validation_loss < self.min_validation_loss:
+            self.min_validation_loss = validation_loss
+            self.counter = 0
+        elif validation_loss > (self.min_validation_loss + self.min_delta):
+            self.counter += 1
+            if self.counter >= self.patience:
+                return True
+        return False
 
 def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
     # print("before size")
@@ -528,14 +463,15 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
             pred = model(X1.float(), X2.float(), X3.float())
             yReshaped = torch.Tensor([y])
             loss = loss_fn(pred, yReshaped)
-      
+
             val_loss_batch.append(loss.detach().item())
-    
+
     val_loss_epoch = np.average(val_loss_batch)
 
     print("Validation loss: ", val_loss_epoch)
 
     return loss_epoch, val_loss_epoch
+
 
 '''
 def test_loop(dataloader, model, loss_fn):
@@ -553,6 +489,7 @@ def test_loop(dataloader, model, loss_fn):
     correct /= size
     # print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
 '''
+
 
 def plotLearningCurves(train_loss, val_loss):
     print(len(train_loss))
@@ -574,6 +511,7 @@ def plotLearningCurves(train_loss, val_loss):
     plt.legend()
     plt.show()
 
+
 def runGraphNeuralNetwork():
     model = GraphNeuralNetwork()
     model = model.float()
@@ -592,9 +530,14 @@ def runGraphNeuralNetwork():
 
     test_data_loader, val_data_loader, train_data_loader = train_val_test_split()
 
+    early_stopper = EarlyStopper(patience=150, min_delta=0.0)
+
     epochs = 1000
+
     for t in range(epochs):
-        print(f"Epoch {t + 1}\n-------------------------------")
+        print(f"Epoch {t + 1}")
+        print("Learning rate: ", optimizer.param_groups[0]["lr"])
+        print("-------------------------------")
         # we need to check to see if train_data and val_data is being shuffled before each epoch along with playing around with different initializations (and can do multiple reruns)
         # we can also try SGD for a few epochs (5) before doing Adam or maybe try SGD for all 20 epochs
         # we can run several jupyter notebooks in parallel
@@ -607,33 +550,18 @@ def runGraphNeuralNetwork():
 
         lr_scheduler.step(val_loss_epoch_value)
 
+        if early_stopper.early_stop(val_loss_epoch_value):
+            break
+
     print("Done!")
 
     plotLearningCurves(train_loss, val_loss)
+
 
 def main():
     # torch.autograd.set_detect_anomaly(True)
     runGraphNeuralNetwork()
 
+
 if __name__ == '__main__':
     main()
-
-'''
-print("let's see what's coming out of our dataloader")
-
-xNodeFError = 0
-xEdgeIError = 0
-xEdgeFError = 0
-
-for batch, (X, y) in enumerate(dataloader.dataset):
-    if not hasattr(X, "node_features"):
-        xNodeFError += 1
-    if not hasattr(X, "edge_index"):
-        xEdgeIError += 1
-    if not hasattr(X, "edge_features"):
-        xEdgeFError += 1
-
-print("xNodeError: ", xNodeFError)
-print("xEdgeIError: ", xEdgeIError)
-print("xEdgeFError: ", xEdgeFError)
-'''
