@@ -61,9 +61,36 @@ def featurize_data():
         # if currentNumInstances == maxInstances:
         # break
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
-        if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance,
-                                                                                                        "edge_features"):
-            graph.append(graphInstance)
+        if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance, "edge_features"):
+
+            # number of nodes, edges (technically 2x the number of actual edges), molecular weight,
+            # and one hot encoding of molecular formal charge per table S2 in bondnet supplemental information
+            global_features = np.zeros(6)
+            global_features[0] = graphInstance.num_nodes
+            global_features[1] = graphInstance.num_edges
+            global_features[2] = int(rdkit.Chem.Descriptors.ExactMolWt(rdkit.Chem.MolFromSmiles(soldata.SMILES[i])))
+
+            formal_charge = rdkit.Chem.rdmolops.GetFormalCharge(rdkit.Chem.MolFromSmiles(soldata.SMILES[i]))
+
+            if formal_charge < 0:
+                global_features[3] = 1
+                global_features[4] = 0
+                global_features[5] = 0
+            elif formal_charge > 0:
+                global_features[3] = 0
+                global_features[4] = 0
+                global_features[5] = 1
+            else:
+                global_features[3] = 0
+                global_features[4] = 1
+                global_features[5] = 0
+
+            # ask das about global features normalization and conversion of moleculr weight to integer (should we do this? if so, truncate or round?)
+            graphInstanceWithGlobalFeatures = dc.GraphData(node_features=graphInstance.node_features,
+                                             edge_index=graphInstance.edge_index,
+                                             edge_features=graphInstance.edge_features,
+                                             z=global_features)
+            graph.append(graphInstanceWithGlobalFeatures)
             sol.append(soldata.Solubility[i])
             # currentNumInstances += 1
 

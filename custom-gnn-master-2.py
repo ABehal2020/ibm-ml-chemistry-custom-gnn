@@ -264,7 +264,8 @@ class NodeFeatures(torch.nn.Module):
             intermediate_node_feature = dropoutLayer(intermediate_node_feature)
 
             # node_features[i] = F.relu(intermediate_node_feature).T
-            node_features[0][i] = ((original_node_features[0][i].T + F.relu(intermediate_node_feature)).T).detach().clone()
+            node_features[0][i] = (
+                (original_node_features[0][i].T + F.relu(intermediate_node_feature)).T).detach().clone()
 
             # print("actually updated node_features[i]: ", node_features[0][i])
             # print("actually updated node_features[i].size(): ", node_features[0][i].size())
@@ -322,46 +323,46 @@ class EdgeFeatures(torch.nn.Module):
 class Graph2Graph(torch.nn.Module):
     def __init__(self, c_in1, c_out1, c_out2):
         super().__init__()
+        # self.NodeFeaturesConvolution = NodeFeatures(c_in1, c_out1, c_out2)
         self.EdgeFeaturesConvolution = EdgeFeatures(c_in1, c_out1, c_out2)
-        self.NodeFeaturesConvolution = NodeFeatures(c_in1, c_out1, c_out2)
 
     def forward(self, node_features, edge_index, edge_features):
         # print("node_features_shape: ", node_features.shape)
         # print("edge_features_shape: ", edge_features.shape)
-        # ask das about this ordering
+        # node_features = self.NodeFeaturesConvolution(node_features, edge_index, edge_features)
         edge_features = self.EdgeFeaturesConvolution(node_features, edge_index, edge_features)
-        node_features = self.NodeFeaturesConvolution(node_features, edge_index, edge_features)
-
 
         return node_features, edge_features
 
 
 class Features_Set2Set():
     def __init__(self, initial_dim_out):
-        self.node_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
+        # self.node_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
         self.edge_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
 
     def transform_then_concat(self, node_features, edge_features):
         # RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [1, 24]], which is output 0 of AsStridedBackward0, is at version 8; expected version 7 instead. Hint: the backtrace further above shows the operation that failed to compute its gradient. The variable in question was changed in there or anywhere later. Good luck!
         # error above occurs if node and edge input features for Set2Set are not copied first
 
-        node_features_input = node_features.detach().clone()
+        # node_features_input = node_features.detach().clone()
         edge_features_input = edge_features.detach().clone()
 
-        node_features_input = torch.reshape(node_features_input,
-                                            (node_features_input.shape[1], node_features_input.shape[2]))
+        # node_features_input = torch.reshape(node_features_input,
+                                            # (node_features_input.shape[1], node_features_input.shape[2]))
         edge_features_input = torch.reshape(edge_features_input,
                                             (edge_features_input.shape[1], edge_features_input.shape[2]))
 
-        node_features_transformed = self.node_s2s(node_features_input)
+        # node_features_transformed = self.node_s2s(node_features_input)
         edge_features_transformed = self.edge_s2s(edge_features_input)
 
-        node_features_transformed = torch.reshape(node_features_transformed, (-1,))
+        # node_features_transformed = torch.reshape(node_features_transformed, (-1,))
         edge_features_transformed = torch.reshape(edge_features_transformed, (-1,))
 
-        concatenated_features = torch.cat((node_features_transformed, edge_features_transformed))
+        # concatenated_features = torch.cat((node_features_transformed, edge_features_transformed))
 
-        return concatenated_features
+        # return concatenated_features
+
+        return edge_features_transformed
 
 
 class Graph2Property(torch.nn.Module):
@@ -386,7 +387,7 @@ class Graph2Property(torch.nn.Module):
 
 
 class GraphNeuralNetwork(torch.nn.Module):
-    def __init__(self, nodes_initial_dim_in=30, edges_initial_dim_in=11, initial_dim_out=24, g2g_input_dim=96,
+    def __init__(self, nodes_initial_dim_in=30, edges_initial_dim_in=11, initial_dim_out=24, g2g_input_dim=48,
                  g2g_hidden_dim=256, g2p_dim_1=256, g2p_dim_2=128, g2p_dim_3=64):
         super(GraphNeuralNetwork, self).__init__()
         self.nodes_initial_embedding = InitialEmbedding(nodes_initial_dim_in, initial_dim_out)

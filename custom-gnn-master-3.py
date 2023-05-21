@@ -264,7 +264,8 @@ class NodeFeatures(torch.nn.Module):
             intermediate_node_feature = dropoutLayer(intermediate_node_feature)
 
             # node_features[i] = F.relu(intermediate_node_feature).T
-            node_features[0][i] = ((original_node_features[0][i].T + F.relu(intermediate_node_feature)).T).detach().clone()
+            node_features[0][i] = (
+                (original_node_features[0][i].T + F.relu(intermediate_node_feature)).T).detach().clone()
 
             # print("actually updated node_features[i]: ", node_features[0][i])
             # print("actually updated node_features[i].size(): ", node_features[0][i].size())
@@ -322,16 +323,14 @@ class EdgeFeatures(torch.nn.Module):
 class Graph2Graph(torch.nn.Module):
     def __init__(self, c_in1, c_out1, c_out2):
         super().__init__()
-        self.EdgeFeaturesConvolution = EdgeFeatures(c_in1, c_out1, c_out2)
         self.NodeFeaturesConvolution = NodeFeatures(c_in1, c_out1, c_out2)
+        self.EdgeFeaturesConvolution = EdgeFeatures(c_in1, c_out1, c_out2)
 
     def forward(self, node_features, edge_index, edge_features):
         # print("node_features_shape: ", node_features.shape)
         # print("edge_features_shape: ", edge_features.shape)
-        # ask das about this ordering
-        edge_features = self.EdgeFeaturesConvolution(node_features, edge_index, edge_features)
         node_features = self.NodeFeaturesConvolution(node_features, edge_index, edge_features)
-
+        edge_features = self.EdgeFeaturesConvolution(node_features, edge_index, edge_features)
 
         return node_features, edge_features
 
@@ -396,7 +395,7 @@ class GraphNeuralNetwork(torch.nn.Module):
         self.g2p_module = Graph2Property(g2g_input_dim, g2p_dim_1, g2p_dim_2, g2p_dim_3, 1)
 
     # g2g_num's default should be 4, can be set to 1 for memory debugging purposes
-    def forward(self, X1, X2, X3, g2g_num=1):
+    def forward(self, X1, X2, X3, g2g_num=3):
         node_features = X1
         edge_index = X2
         edge_features = X3
