@@ -59,39 +59,43 @@ def featurize_data():
     # for i in range(100):
     for i in range(len(soldata)):
         # if currentNumInstances == maxInstances:
-        # break
+            # break
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
         if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance, "edge_features"):
 
             # number of nodes, edges (technically 2x the number of actual edges), molecular weight,
             # and one hot encoding of molecular formal charge per table S2 in bondnet supplemental information
-            global_features = np.zeros(6)
-            global_features[0] = graphInstance.num_nodes
-            global_features[1] = graphInstance.num_edges
-            global_features[2] = int(rdkit.Chem.Descriptors.ExactMolWt(rdkit.Chem.MolFromSmiles(soldata.SMILES[i])))
+            global_features = np.zeros((1, 6))
+            global_features[0][0] = graphInstance.num_nodes
+            global_features[0][1] = graphInstance.num_edges
+            global_features[0][2] = int(rdkit.Chem.Descriptors.ExactMolWt(rdkit.Chem.MolFromSmiles("CO")))
 
-            formal_charge = rdkit.Chem.rdmolops.GetFormalCharge(rdkit.Chem.MolFromSmiles(soldata.SMILES[i]))
+            formal_charge = rdkit.Chem.rdmolops.GetFormalCharge(rdkit.Chem.MolFromSmiles("CO"))
 
             if formal_charge < 0:
-                global_features[3] = 1
-                global_features[4] = 0
-                global_features[5] = 0
+                global_features[0][3] = 1
+                global_features[0][4] = 0
+                global_features[0][5] = 0
             elif formal_charge > 0:
-                global_features[3] = 0
-                global_features[4] = 0
-                global_features[5] = 1
+                global_features[0][3] = 0
+                global_features[0][4] = 0
+                global_features[0][5] = 1
             else:
-                global_features[3] = 0
-                global_features[4] = 1
-                global_features[5] = 0
+                global_features[0][3] = 0
+                global_features[0][4] = 1
+                global_features[0][5] = 0
 
             # ask das about global features normalization and conversion of moleculr weight to integer (should we do this? if so, truncate or round?)
-            graphInstanceWithGlobalFeatures = dc.GraphData(node_features=graphInstance.node_features,
+            graphInstance.z = global_features
+            '''
+            graphInstanceWithGlobalFeatures = dc.feat.graph_data.GraphData(node_features=graphInstance.node_features,
                                              edge_index=graphInstance.edge_index,
                                              edge_features=graphInstance.edge_features,
                                              z=global_features)
-            graph.append(graphInstanceWithGlobalFeatures)
+            '''
+            graph.append(graphInstance)
             sol.append(soldata.Solubility[i])
+
             # currentNumInstances += 1
 
     return graph, sol
@@ -115,6 +119,7 @@ class CustomDataset(data.Dataset):
             graphInstanceNodeFeatures = self.transform(graphInstance.node_features)
             graphInstanceEdgeIndex = self.transform(graphInstance.edge_index)
             graphInstanceEdgeFeatures = self.transform(graphInstance.edge_features)
+            graphInstanceGlobalFeatures = self.transform(graphInstance.z)
 
             # B = torch.reshape(A, (A.shape[1], A.shape[2]))
             graphInstanceNodeFeatures = torch.reshape(graphInstanceNodeFeatures, (
@@ -123,11 +128,13 @@ class CustomDataset(data.Dataset):
                                                    (graphInstanceEdgeIndex.shape[1], graphInstanceEdgeIndex.shape[2]))
             graphInstanceEdgeFeatures = torch.reshape(graphInstanceEdgeFeatures, (
             graphInstanceEdgeFeatures.shape[1], graphInstanceEdgeFeatures.shape[2]))
+            graphInstanceGlobalFeatures = torch.reshape(graphInstanceGlobalFeatures, (
+            graphInstanceGlobalFeatures.shape[1], graphInstanceGlobalFeatures.shape[2]))
 
         if self.target_transform:
             solInstance = self.target_transform(solInstance)
 
-        return graphInstanceNodeFeatures, graphInstanceEdgeIndex, graphInstanceEdgeFeatures, solInstance
+        return graphInstanceNodeFeatures, graphInstanceEdgeIndex, graphInstanceEdgeFeatures, graphInstanceGlobalFeatures, solInstance
 
 
 def train_val_test_split():
@@ -213,6 +220,53 @@ class FCNN(torch.nn.Module):
 
         return features
 
+# implementation of equation 4 in bondnet paper
+# https://pubs.rsc.org/en/content/articlepdf/2021/sc/d0sc05251e
+class EdgeFeatures(torch.nn.Module):
+    # c_in1 = 24, c_out1 = 24, c_out2 = 24
+    def __init__(self, c_in1, c_out1, c_out2):
+        super().__init__()
+        # self.fc_initial_embedding = InitialEmbedding(c_in=11, c_out=24)
+        self.FCNN_one = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
+        self.FCNN_two = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
+        self.FCNN_three = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
+
+    def forward(self, node_features, edge_index, edge_features, global_features):
+        original_edge_features = edge_features.detach().clone()
+
+        for i in range(edge_index.shape[1]):
+            # summing node features involved in the given edge and transforming them
+            firstNodeIndex = int(edge_index[0][0][i])
+            secondNodeIndex = int(edge_index[0][1][i])
+            node_features_sum = node_features[0][firstNodeIndex] + node_features[0][secondNodeIndex]
+            intermediate_node_features = self.FCNN_one(node_features_sum.T)
+
+            # transforming the features of the given edge
+            intermediate_edge_feature = self.FCNN_two(edge_features[0][i].T)
+
+            intermediate_global_features = self.FCNN_three(global_features[0][0].T)
+
+            # merging node features with features of the given edge
+
+            # UPDATE TO INCLUDE THIS AT SOME POINT
+            # intermediate_node_features + intermediate_edge_feature --> batch normalization --> drop out --> then ReLu
+
+            intermediate_features_relu_input = intermediate_node_features + intermediate_edge_feature + intermediate_global_features
+
+            instanceNorm1dLayer = nn.InstanceNorm1d(intermediate_features_relu_input.size(dim=0))
+            dropoutLayer = nn.Dropout(p=0.1)
+
+            intermediate_features_relu_input = instanceNorm1dLayer(
+                torch.reshape(intermediate_features_relu_input, (1, intermediate_features_relu_input.size(dim=0))))
+            intermediate_features_relu_input = torch.reshape(intermediate_features_relu_input, (-1,))
+            intermediate_features_relu_input = dropoutLayer(intermediate_features_relu_input)
+
+            intermediate_features = F.relu(intermediate_features_relu_input)
+
+            # updating edge features
+            edge_features[0][i] = ((original_edge_features[0][i].T + intermediate_features).T).detach().clone()
+
+        return edge_features
 
 # implementation of equation 5 in bondnet paper
 # https://pubs.rsc.org/en/content/articlepdf/2021/sc/d0sc05251e
@@ -223,8 +277,9 @@ class NodeFeatures(torch.nn.Module):
         # self.fc_initial_embedding = InitialEmbedding(c_in=30, c_out=24)
         self.FCNN_one = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
         self.FCNN_two = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
+        self.FCNN_three = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
 
-    def forward(self, node_features, edge_index, edge_features):
+    def forward(self, node_features, edge_index, edge_features, global_features):
         sigmoidFunction = torch.nn.Sigmoid()
 
         original_node_features = node_features.detach().clone()
@@ -278,6 +333,8 @@ class NodeFeatures(torch.nn.Module):
             # print("intermediate_node_feature: ", intermediate_node_feature)
             # print("intermediate_node_feature.size: ", intermediate_node_feature.size())
 
+            intermediate_node_feature += self.FCNN_three(global_features[0][0].T)
+
             # UPDATE TO INCLUDE THIS AT SOME POINT
             # intermediate_node_feature --> batch normalization --> drop out --> then ReLu
             # should I use batch norm 1D and what should my feature size be at this point?
@@ -299,68 +356,50 @@ class NodeFeatures(torch.nn.Module):
 
         return node_features
 
-
-# implementation of equation 4 in bondnet paper
-# https://pubs.rsc.org/en/content/articlepdf/2021/sc/d0sc05251e
-class EdgeFeatures(torch.nn.Module):
+class GlobalFeatures(torch.nn.Module):
     # c_in1 = 24, c_out1 = 24, c_out2 = 24
     def __init__(self, c_in1, c_out1, c_out2):
         super().__init__()
-        # self.fc_initial_embedding = InitialEmbedding(c_in=11, c_out=24)
+        # self.fc_initial_embedding = InitialEmbedding(c_in=30, c_out=24)
         self.FCNN_one = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
         self.FCNN_two = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
+        self.FCNN_three = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
 
-    def forward(self, node_features, edge_index, edge_features):
-        original_edge_features = edge_features.detach().clone()
+    def forward(self, node_features, edge_index, edge_features, global_features):
+        original_global_features = global_features.detach().clone()
 
-        for i in range(edge_index.shape[1]):
-            # summing node features involved in the given edge and transforming them
-            firstNodeIndex = int(edge_index[0][0][i])
-            secondNodeIndex = int(edge_index[0][1][i])
-            node_features_sum = node_features[0][firstNodeIndex] + node_features[0][secondNodeIndex]
-            intermediate_node_features = self.FCNN_one(node_features_sum.T)
+        intermediate_global_features = self.FCNN_one((torch.sum(node_features[0], dim=0)/(node_features[0].shape[0])).T) + \
+                                       self.FCNN_two((torch.sum(edge_features[0], dim=0)/(edge_features[0].shape[0])).T) + \
+                                       self.FCNN_three(global_features[0][0].T)
 
-            # transforming the features of the given edge
-            intermediate_edge_feature = self.FCNN_two(edge_features[0][i].T)
+        instanceNorm1dLayer = nn.InstanceNorm1d(intermediate_global_features.size(dim=0))
+        dropoutLayer = nn.Dropout(p=0.1)
 
-            # merging node features with features of the given edge
+        intermediate_global_features = instanceNorm1dLayer(
+            torch.reshape(intermediate_global_features, (1, intermediate_global_features.size(dim=0))))
+        intermediate_global_features = torch.reshape(intermediate_global_features, (-1,))
+        intermediate_global_features = dropoutLayer(intermediate_global_features)
 
-            # UPDATE TO INCLUDE THIS AT SOME POINT
-            # intermediate_node_features + intermediate_edge_feature --> batch normalization --> drop out --> then ReLu
+        global_features[0][0] = ((original_global_features[0][0].T + F.relu(intermediate_global_features)).T).detach().clone()
 
-            intermediate_features_relu_input = intermediate_node_features + intermediate_edge_feature
-
-            instanceNorm1dLayer = nn.InstanceNorm1d(intermediate_features_relu_input.size(dim=0))
-            dropoutLayer = nn.Dropout(p=0.1)
-
-            intermediate_features_relu_input = instanceNorm1dLayer(
-                torch.reshape(intermediate_features_relu_input, (1, intermediate_features_relu_input.size(dim=0))))
-            intermediate_features_relu_input = torch.reshape(intermediate_features_relu_input, (-1,))
-            intermediate_features_relu_input = dropoutLayer(intermediate_features_relu_input)
-
-            intermediate_features = F.relu(intermediate_features_relu_input)
-
-            # updating edge features
-            edge_features[0][i] = ((original_edge_features[0][i].T + intermediate_features).T).detach().clone()
-
-        return edge_features
-
+        return global_features
 
 class Graph2Graph(torch.nn.Module):
     def __init__(self, c_in1, c_out1, c_out2):
         super().__init__()
         self.EdgeFeaturesConvolution = EdgeFeatures(c_in1, c_out1, c_out2)
         self.NodeFeaturesConvolution = NodeFeatures(c_in1, c_out1, c_out2)
+        self.GlobalFeaturesConvolution = GlobalFeatures(c_in1, c_out1, c_out2)
 
-    def forward(self, node_features, edge_index, edge_features):
+    def forward(self, node_features, edge_index, edge_features, global_features):
         # print("node_features_shape: ", node_features.shape)
         # print("edge_features_shape: ", edge_features.shape)
         # ask das about this ordering
-        edge_features = self.EdgeFeaturesConvolution(node_features, edge_index, edge_features)
-        node_features = self.NodeFeaturesConvolution(node_features, edge_index, edge_features)
+        edge_features = self.EdgeFeaturesConvolution(node_features, edge_index, edge_features, global_features)
+        node_features = self.NodeFeaturesConvolution(node_features, edge_index, edge_features, global_features)
+        global_features = self.GlobalFeaturesConvolution(node_features, edge_index, edge_features, global_features)
 
-
-        return node_features, edge_features
+        return node_features, edge_features, global_features
 
 
 class Features_Set2Set():
@@ -368,12 +407,13 @@ class Features_Set2Set():
         self.node_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
         self.edge_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
 
-    def transform_then_concat(self, node_features, edge_features):
+    def transform_then_concat(self, node_features, edge_features, global_features):
         # RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [1, 24]], which is output 0 of AsStridedBackward0, is at version 8; expected version 7 instead. Hint: the backtrace further above shows the operation that failed to compute its gradient. The variable in question was changed in there or anywhere later. Good luck!
         # error above occurs if node and edge input features for Set2Set are not copied first
 
         node_features_input = node_features.detach().clone()
         edge_features_input = edge_features.detach().clone()
+        global_features_input = global_features.detach().clone()
 
         node_features_input = torch.reshape(node_features_input,
                                             (node_features_input.shape[1], node_features_input.shape[2]))
@@ -385,8 +425,9 @@ class Features_Set2Set():
 
         node_features_transformed = torch.reshape(node_features_transformed, (-1,))
         edge_features_transformed = torch.reshape(edge_features_transformed, (-1,))
+        global_features_transformed = torch.reshape(global_features_input, (-1,))
 
-        concatenated_features = torch.cat((node_features_transformed, edge_features_transformed))
+        concatenated_features = torch.cat((node_features_transformed, edge_features_transformed, global_features_transformed))
 
         return concatenated_features
 
@@ -413,30 +454,36 @@ class Graph2Property(torch.nn.Module):
 
 
 class GraphNeuralNetwork(torch.nn.Module):
-    def __init__(self, nodes_initial_dim_in=30, edges_initial_dim_in=11, initial_dim_out=24, g2g_input_dim=96,
-                 g2g_hidden_dim=256, g2p_dim_1=256, g2p_dim_2=128, g2p_dim_3=64):
+    def __init__(self, nodes_initial_dim_in=30, edges_initial_dim_in=11, global_initial_dim_in=6,
+                 initial_dim_out=24, g2g_input_dim=120, g2g_hidden_dim=256, g2p_dim_1=256, g2p_dim_2=128, g2p_dim_3=64):
         super(GraphNeuralNetwork, self).__init__()
         self.nodes_initial_embedding = InitialEmbedding(nodes_initial_dim_in, initial_dim_out)
         self.edges_initial_embedding = InitialEmbedding(edges_initial_dim_in, initial_dim_out)
+        self.global_initial_embedding = InitialEmbedding(global_initial_dim_in, initial_dim_out)
         self.g2g_module = Graph2Graph(initial_dim_out, g2g_hidden_dim, initial_dim_out)
         self.features_set2set = Features_Set2Set(initial_dim_out)
         self.g2p_module = Graph2Property(g2g_input_dim, g2p_dim_1, g2p_dim_2, g2p_dim_3, 1)
 
     # g2g_num's default should be 4, can be set to 1 for memory debugging purposes
-    def forward(self, X1, X2, X3, g2g_num=1):
+    def forward(self, X1, X2, X3, X4, g2g_num=0):
         node_features = X1
         edge_index = X2
         edge_features = X3
+        global_features = X4
 
         node_features_updated = self.nodes_initial_embedding(node_features)
         edge_features_updated = self.edges_initial_embedding(edge_features)
+        global_features_updated = self.global_initial_embedding(global_features)
 
         for i in range(g2g_num):
-            node_features_updated, edge_features_updated = self.g2g_module(node_features_updated, edge_index,
-                                                                           edge_features_updated)
+            node_features_updated, edge_features_updated, global_features_updated = self.g2g_module(node_features_updated,
+                                                                                                    edge_index,
+                                                                                                    edge_features_updated,
+                                                                                                    global_features_updated)
 
         features_concatenated = self.features_set2set.transform_then_concat(node_features_updated,
-                                                                            edge_features_updated)
+                                                                            edge_features_updated,
+                                                                            global_features_updated)
 
         predicted_value = self.g2p_module(features_concatenated)
 
@@ -466,8 +513,8 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
     # print("after size")
     # print(size)
     loss_batch = []
-    for batch, (X1, X2, X3, y) in enumerate(dataloader.dataset):
-        pred = model(X1.float(), X2.float(), X3.float())
+    for batch, (X1, X2, X3, X4, y) in enumerate(dataloader.dataset):
+        pred = model(X1.float(), X2.float(), X3.float(), X4.float())
         yReshaped = torch.Tensor([y])
         # print(yReshaped.shape)
         # print("Prediction: %s, Actual value %s", pred, yReshaped)
@@ -487,8 +534,8 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
     val_loss_batch = []
 
     with torch.no_grad():
-        for batch, (X1, X2, X3, y) in enumerate(dataloader2.dataset):
-            pred = model(X1.float(), X2.float(), X3.float())
+        for batch, (X1, X2, X3, X4, y) in enumerate(dataloader2.dataset):
+            pred = model(X1.float(), X2.float(), X3.float(), X4.float())
             yReshaped = torch.Tensor([y])
             loss = loss_fn(pred, yReshaped)
 
