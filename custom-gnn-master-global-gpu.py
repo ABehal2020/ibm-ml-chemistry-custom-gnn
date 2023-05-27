@@ -24,6 +24,7 @@ import random
 from torch_geometric.nn.aggr import Set2Set
 import multiprocessing
 from torchvision.transforms import Compose, ToTensor
+from sklearn.preprocessing import MinMaxScaler
 
 def get_data():
     # had to rehost because dataverse isn't reliable
@@ -53,8 +54,14 @@ def featurize_data():
     graph = []
     sol = []
 
+    all_global_features = np.zeros((len(soldata), 6))
+
+    kept_graph_indices = []
+
     # currentNumInstances = 0
     # maxInstances = 100
+
+    global_feature_counter = 0
 
     # for i in range(100):
     for i in range(len(soldata)):
@@ -62,31 +69,33 @@ def featurize_data():
             # break
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
         if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance, "edge_features"):
+            kept_graph_indices.append(i)
 
             # number of nodes, edges (technically 2x the number of actual edges), molecular weight,
             # and one hot encoding of molecular formal charge per table S2 in bondnet supplemental information
-            global_features = np.zeros((1, 6))
-            global_features[0][0] = graphInstance.num_nodes
-            global_features[0][1] = graphInstance.num_edges
-            global_features[0][2] = int(rdkit.Chem.Descriptors.ExactMolWt(rdkit.Chem.MolFromSmiles("CO")))
+            all_global_features[global_feature_counter][0] = graphInstance.num_nodes
+            all_global_features[global_feature_counter][1] = graphInstance.num_edges
+            all_global_features[global_feature_counter][2] = round(rdkit.Chem.Descriptors.ExactMolWt(rdkit.Chem.MolFromSmiles("CO")))
 
             formal_charge = rdkit.Chem.rdmolops.GetFormalCharge(rdkit.Chem.MolFromSmiles("CO"))
 
             if formal_charge < 0:
-                global_features[0][3] = 1
-                global_features[0][4] = 0
-                global_features[0][5] = 0
+                all_global_features[global_feature_counter][3] = 1
+                all_global_features[global_feature_counter][4] = 0
+                all_global_features[global_feature_counter][5] = 0
             elif formal_charge > 0:
-                global_features[0][3] = 0
-                global_features[0][4] = 0
-                global_features[0][5] = 1
+                all_global_features[global_feature_counter][3] = 0
+                all_global_features[global_feature_counter][4] = 0
+                all_global_features[global_feature_counter][5] = 1
             else:
-                global_features[0][3] = 0
-                global_features[0][4] = 1
-                global_features[0][5] = 0
+                all_global_features[global_feature_counter][3] = 0
+                all_global_features[global_feature_counter][4] = 1
+                all_global_features[global_feature_counter][5] = 0
+
+            global_feature_counter += 1
 
             # ask das about global features normalization and conversion of moleculr weight to integer (should we do this? if so, truncate or round?)
-            graphInstance.z = global_features
+            # graphInstance.z = global_features
             '''
             graphInstanceWithGlobalFeatures = dc.feat.graph_data.GraphData(node_features=graphInstance.node_features,
                                              edge_index=graphInstance.edge_index,
@@ -97,6 +106,18 @@ def featurize_data():
             sol.append(soldata.Solubility[i])
 
             # currentNumInstances += 1
+
+    # remove rows of zeros from 2D array (these correspond to graphs that were never properly featurized
+    # and will not be included in the dataset)
+    all_global_features = all_global_features[~np.all(all_global_features == 0, axis=1)]
+
+    scaler = MinMaxScaler()
+    all_global_features[:, :3] = scaler.fit_transform(all_global_features[:, :3])
+
+    for i in range(len(graph)):
+        graph[i].z = all_global_features[i].reshape(1, 6)
+        # print("graphInstance global features: ")
+        # print(graph[i].z)
 
     return graph, sol
 
@@ -572,7 +593,7 @@ def test_loop(dataloader, model, loss_fn):
 
 def plotLearningCurves(train_loss, val_loss):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
+
     print(len(train_loss))
     print(len(val_loss))
 
