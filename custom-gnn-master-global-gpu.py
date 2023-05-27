@@ -619,7 +619,7 @@ def runGraphNeuralNetwork():
     # print(f"Using {device} device")
 
     model = GraphNeuralNetwork()
-    model = model.to(device).float()
+    model = model.float().to(device)
 
     learning_rate = 1e-3
     loss_fn = nn.MSELoss()
