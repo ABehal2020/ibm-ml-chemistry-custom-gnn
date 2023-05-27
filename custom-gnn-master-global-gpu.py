@@ -425,8 +425,10 @@ class Graph2Graph(torch.nn.Module):
 
 class Features_Set2Set():
     def __init__(self, initial_dim_out):
-        self.node_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
-        self.edge_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        self.node_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3).to(device)
+        self.edge_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3).to(device)
 
     def transform_then_concat(self, node_features, edge_features, global_features):
         # RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [1, 24]], which is output 0 of AsStridedBackward0, is at version 8; expected version 7 instead. Hint: the backtrace further above shows the operation that failed to compute its gradient. The variable in question was changed in there or anywhere later. Good luck!
