@@ -24,12 +24,14 @@ import random
 from torch_geometric.nn.aggr import Set2Set
 import multiprocessing
 from torchvision.transforms import Compose, ToTensor
+from sklearn.preprocessing import MinMaxScaler
+
 
 def get_data():
     # had to rehost because dataverse isn't reliable
     soldata = pd.read_csv(
-        # "https://github.com/whitead/dmol-book/raw/main/data/curated-solubility-dataset.csv"
-        "/Users/adityabehal/Downloads/curated-solubility-dataset.csv"
+        "https://github.com/whitead/dmol-book/raw/main/data/curated-solubility-dataset.csv"
+        # "/Users/adityabehal/Downloads/curated-solubility-dataset.csv"
     )
 
     return soldata
@@ -53,40 +55,50 @@ def featurize_data():
     graph = []
     sol = []
 
+    all_global_features = np.zeros((len(soldata), 6))
+
+    kept_graph_indices = []
+
     # currentNumInstances = 0
     # maxInstances = 100
+
+    global_feature_counter = 0
 
     # for i in range(100):
     for i in range(len(soldata)):
         # if currentNumInstances == maxInstances:
-            # break
+        # break
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
-        if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance, "edge_features"):
+        if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance,
+                                                                                                        "edge_features"):
+            kept_graph_indices.append(i)
 
             # number of nodes, edges (technically 2x the number of actual edges), molecular weight,
             # and one hot encoding of molecular formal charge per table S2 in bondnet supplemental information
-            global_features = np.zeros((1, 6))
-            global_features[0][0] = graphInstance.num_nodes
-            global_features[0][1] = graphInstance.num_edges
-            global_features[0][2] = int(rdkit.Chem.Descriptors.ExactMolWt(rdkit.Chem.MolFromSmiles("CO")))
+            all_global_features[global_feature_counter][0] = graphInstance.num_nodes
+            all_global_features[global_feature_counter][1] = graphInstance.num_edges
+            all_global_features[global_feature_counter][2] = round(
+                rdkit.Chem.Descriptors.ExactMolWt(rdkit.Chem.MolFromSmiles("CO")))
 
             formal_charge = rdkit.Chem.rdmolops.GetFormalCharge(rdkit.Chem.MolFromSmiles("CO"))
 
             if formal_charge < 0:
-                global_features[0][3] = 1
-                global_features[0][4] = 0
-                global_features[0][5] = 0
+                all_global_features[global_feature_counter][3] = 1
+                all_global_features[global_feature_counter][4] = 0
+                all_global_features[global_feature_counter][5] = 0
             elif formal_charge > 0:
-                global_features[0][3] = 0
-                global_features[0][4] = 0
-                global_features[0][5] = 1
+                all_global_features[global_feature_counter][3] = 0
+                all_global_features[global_feature_counter][4] = 0
+                all_global_features[global_feature_counter][5] = 1
             else:
-                global_features[0][3] = 0
-                global_features[0][4] = 1
-                global_features[0][5] = 0
+                all_global_features[global_feature_counter][3] = 0
+                all_global_features[global_feature_counter][4] = 1
+                all_global_features[global_feature_counter][5] = 0
+
+            global_feature_counter += 1
 
             # ask das about global features normalization and conversion of moleculr weight to integer (should we do this? if so, truncate or round?)
-            graphInstance.z = global_features
+            # graphInstance.z = global_features
             '''
             graphInstanceWithGlobalFeatures = dc.feat.graph_data.GraphData(node_features=graphInstance.node_features,
                                              edge_index=graphInstance.edge_index,
@@ -97,6 +109,18 @@ def featurize_data():
             sol.append(soldata.Solubility[i])
 
             # currentNumInstances += 1
+
+    # remove rows of zeros from 2D array (these correspond to graphs that were never properly featurized
+    # and will not be included in the dataset)
+    all_global_features = all_global_features[~np.all(all_global_features == 0, axis=1)]
+
+    scaler = MinMaxScaler()
+    all_global_features[:, :3] = scaler.fit_transform(all_global_features[:, :3])
+
+    for i in range(len(graph)):
+        graph[i].z = all_global_features[i].reshape(1, 6)
+        # print("graphInstance global features: ")
+        # print(graph[i].z)
 
     return graph, sol
 
@@ -123,13 +147,13 @@ class CustomDataset(data.Dataset):
 
             # B = torch.reshape(A, (A.shape[1], A.shape[2]))
             graphInstanceNodeFeatures = torch.reshape(graphInstanceNodeFeatures, (
-            graphInstanceNodeFeatures.shape[1], graphInstanceNodeFeatures.shape[2]))
+                graphInstanceNodeFeatures.shape[1], graphInstanceNodeFeatures.shape[2]))
             graphInstanceEdgeIndex = torch.reshape(graphInstanceEdgeIndex,
                                                    (graphInstanceEdgeIndex.shape[1], graphInstanceEdgeIndex.shape[2]))
             graphInstanceEdgeFeatures = torch.reshape(graphInstanceEdgeFeatures, (
-            graphInstanceEdgeFeatures.shape[1], graphInstanceEdgeFeatures.shape[2]))
+                graphInstanceEdgeFeatures.shape[1], graphInstanceEdgeFeatures.shape[2]))
             graphInstanceGlobalFeatures = torch.reshape(graphInstanceGlobalFeatures, (
-            graphInstanceGlobalFeatures.shape[1], graphInstanceGlobalFeatures.shape[2]))
+                graphInstanceGlobalFeatures.shape[1], graphInstanceGlobalFeatures.shape[2]))
 
         if self.target_transform:
             solInstance = self.target_transform(solInstance)
@@ -145,7 +169,7 @@ def train_val_test_split():
     cores = multiprocessing.cpu_count()  # Count the number of cores in a computer (includes hyperthreading)
     print("cores: ", cores)
 
-    numWorkersToUse = 0 # because batch size is 1 right now
+    numWorkersToUse = 0  # because batch size is 1 right now
 
     # batch_size=1 was original default - 100 was used in bondnet paper
     # set num_workers=cores for best performance
@@ -220,6 +244,7 @@ class FCNN(torch.nn.Module):
 
         return features
 
+
 # implementation of equation 4 in bondnet paper
 # https://pubs.rsc.org/en/content/articlepdf/2021/sc/d0sc05251e
 class EdgeFeatures(torch.nn.Module):
@@ -267,6 +292,7 @@ class EdgeFeatures(torch.nn.Module):
             edge_features[0][i] = ((original_edge_features[0][i].T + intermediate_features).T).detach().clone()
 
         return edge_features
+
 
 # implementation of equation 5 in bondnet paper
 # https://pubs.rsc.org/en/content/articlepdf/2021/sc/d0sc05251e
@@ -348,13 +374,15 @@ class NodeFeatures(torch.nn.Module):
             intermediate_node_feature = dropoutLayer(intermediate_node_feature)
 
             # node_features[i] = F.relu(intermediate_node_feature).T
-            node_features[0][i] = ((original_node_features[0][i].T + F.relu(intermediate_node_feature)).T).detach().clone()
+            node_features[0][i] = (
+                (original_node_features[0][i].T + F.relu(intermediate_node_feature)).T).detach().clone()
 
             # print("actually updated node_features[i]: ", node_features[0][i])
             # print("actually updated node_features[i].size(): ", node_features[0][i].size())
             # print("********** NODE UPDATED SUCCESSFULLY ****************")
 
         return node_features
+
 
 class GlobalFeatures(torch.nn.Module):
     # c_in1 = 24, c_out1 = 24, c_out2 = 24
@@ -368,8 +396,10 @@ class GlobalFeatures(torch.nn.Module):
     def forward(self, node_features, edge_index, edge_features, global_features):
         original_global_features = global_features.detach().clone()
 
-        intermediate_global_features = self.FCNN_one((torch.sum(node_features[0], dim=0)/(node_features[0].shape[0])).T) + \
-                                       self.FCNN_two((torch.sum(edge_features[0], dim=0)/(edge_features[0].shape[0])).T) + \
+        intermediate_global_features = self.FCNN_one(
+            (torch.sum(node_features[0], dim=0) / (node_features[0].shape[0])).T) + \
+                                       self.FCNN_two(
+                                           (torch.sum(edge_features[0], dim=0) / (edge_features[0].shape[0])).T) + \
                                        self.FCNN_three(global_features[0][0].T)
 
         instanceNorm1dLayer = nn.InstanceNorm1d(intermediate_global_features.size(dim=0))
@@ -380,9 +410,11 @@ class GlobalFeatures(torch.nn.Module):
         intermediate_global_features = torch.reshape(intermediate_global_features, (-1,))
         intermediate_global_features = dropoutLayer(intermediate_global_features)
 
-        global_features[0][0] = ((original_global_features[0][0].T + F.relu(intermediate_global_features)).T).detach().clone()
+        global_features[0][0] = (
+            (original_global_features[0][0].T + F.relu(intermediate_global_features)).T).detach().clone()
 
         return global_features
+
 
 class Graph2Graph(torch.nn.Module):
     def __init__(self, c_in1, c_out1, c_out2):
@@ -404,8 +436,10 @@ class Graph2Graph(torch.nn.Module):
 
 class Features_Set2Set():
     def __init__(self, initial_dim_out):
-        self.node_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
-        self.edge_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        self.node_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3).to(device)
+        self.edge_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3).to(device)
 
     def transform_then_concat(self, node_features, edge_features, global_features):
         # RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [1, 24]], which is output 0 of AsStridedBackward0, is at version 8; expected version 7 instead. Hint: the backtrace further above shows the operation that failed to compute its gradient. The variable in question was changed in there or anywhere later. Good luck!
@@ -427,7 +461,8 @@ class Features_Set2Set():
         edge_features_transformed = torch.reshape(edge_features_transformed, (-1,))
         global_features_transformed = torch.reshape(global_features_input, (-1,))
 
-        concatenated_features = torch.cat((node_features_transformed, edge_features_transformed, global_features_transformed))
+        concatenated_features = torch.cat(
+            (node_features_transformed, edge_features_transformed, global_features_transformed))
 
         return concatenated_features
 
@@ -476,10 +511,11 @@ class GraphNeuralNetwork(torch.nn.Module):
         global_features_updated = self.global_initial_embedding(global_features)
 
         for i in range(g2g_num):
-            node_features_updated, edge_features_updated, global_features_updated = self.g2g_module(node_features_updated,
-                                                                                                    edge_index,
-                                                                                                    edge_features_updated,
-                                                                                                    global_features_updated)
+            node_features_updated, edge_features_updated, global_features_updated = self.g2g_module(
+                node_features_updated,
+                edge_index,
+                edge_features_updated,
+                global_features_updated)
 
         features_concatenated = self.features_set2set.transform_then_concat(node_features_updated,
                                                                             edge_features_updated,
@@ -488,6 +524,7 @@ class GraphNeuralNetwork(torch.nn.Module):
         predicted_value = self.g2p_module(features_concatenated)
 
         return predicted_value
+
 
 # adapted from https://stackoverflow.com/questions/71998978/early-stopping-in-pytorch
 class EarlyStopper:
@@ -507,15 +544,19 @@ class EarlyStopper:
                 return True
         return False
 
+
 def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     # print("before size")
     size = len(dataloader.dataset)
     # print("after size")
     # print(size)
     loss_batch = []
     for batch, (X1, X2, X3, X4, y) in enumerate(dataloader.dataset):
+        X1, X2, X3, X4, y = X1.to(device), X2.to(device), X3.to(device), X4.to(device), y.to(device)
         pred = model(X1.float(), X2.float(), X3.float(), X4.float())
-        yReshaped = torch.Tensor([y])
+        yReshaped = torch.Tensor([y]).to(device)
         # print(yReshaped.shape)
         # print("Prediction: %s, Actual value %s", pred, yReshaped)
         loss = loss_fn(pred, yReshaped)
@@ -535,8 +576,9 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
 
     with torch.no_grad():
         for batch, (X1, X2, X3, X4, y) in enumerate(dataloader2.dataset):
+            X1, X2, X3, X4, y = X1.to(device), X2.to(device), X3.to(device), X4.to(device), y.to(device)
             pred = model(X1.float(), X2.float(), X3.float(), X4.float())
-            yReshaped = torch.Tensor([y])
+            yReshaped = torch.Tensor([y]).to(device)
             loss = loss_fn(pred, yReshaped)
 
             val_loss_batch.append(loss.detach().item())
@@ -567,14 +609,16 @@ def test_loop(dataloader, model, loss_fn):
 
 
 def plotLearningCurves(train_loss, val_loss):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     print(len(train_loss))
     print(len(val_loss))
 
     print("train_loss: ", train_loss)
     print("val_loss: ", val_loss)
 
-    train_loss = torch.Tensor(train_loss)
-    val_loss = torch.Tensor(val_loss)
+    train_loss = torch.Tensor(train_loss).to(device)
+    val_loss = torch.Tensor(val_loss).to(device)
 
     plt.figure(figsize=(10, 5))
     plt.title("Training and Validation Loss")
@@ -588,8 +632,11 @@ def plotLearningCurves(train_loss, val_loss):
 
 
 def runGraphNeuralNetwork():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # print(f"Using {device} device")
+
     model = GraphNeuralNetwork()
-    model = model.float()
+    model = model.float().to(device)
 
     learning_rate = 1e-3
     loss_fn = nn.MSELoss()
@@ -607,7 +654,7 @@ def runGraphNeuralNetwork():
 
     early_stopper = EarlyStopper(patience=150, min_delta=0.0)
 
-    epochs = 20
+    epochs = 1000
 
     for t in range(epochs):
         print(f"Epoch {t + 1}")
