@@ -59,15 +59,15 @@ def featurize_data():
 
     kept_graph_indices = []
 
-    # currentNumInstances = 0
-    # maxInstances = 100
+    # currentNumInstances = 0 #### DEBUG ####
+    # maxInstances = 100 #### DEBUG ####
 
     global_feature_counter = 0
 
     # for i in range(100):
     for i in range(len(soldata)):
-        # if currentNumInstances == maxInstances:
-        # break
+        # if currentNumInstances == maxInstances: #### DEBUG ####
+            # break #### DEBUG ####
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
         if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance,
                                                                                                         "edge_features"):
@@ -108,7 +108,7 @@ def featurize_data():
             graph.append(graphInstance)
             sol.append(soldata.Solubility[i])
 
-            # currentNumInstances += 1
+            # currentNumInstances += 1 #### DEBUG ####
 
     # remove rows of zeros from 2D array (these correspond to graphs that were never properly featurized
     # and will not be included in the dataset)
@@ -257,7 +257,6 @@ class EdgeFeatures(torch.nn.Module):
         self.FCNN_three = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
 
     def forward(self, node_features, edge_index, edge_features, global_features):
-        original_edge_features = edge_features.detach().clone()
 
         for i in range(edge_index.shape[1]):
             # summing node features involved in the given edge and transforming them
@@ -288,10 +287,12 @@ class EdgeFeatures(torch.nn.Module):
 
             intermediate_features = F.relu(intermediate_features_relu_input)
 
-            # updating edge features
-            edge_features[0][i] = ((original_edge_features[0][i].T + intermediate_features).T).detach().clone()
+            edge_features_updated = edge_features.clone()
 
-        return edge_features
+            # updating edge features
+            edge_features_updated[0][i] = ((edge_features[0][i].T + intermediate_features).T)
+
+        return edge_features_updated
 
 
 # implementation of equation 5 in bondnet paper
@@ -308,14 +309,12 @@ class NodeFeatures(torch.nn.Module):
     def forward(self, node_features, edge_index, edge_features, global_features):
         sigmoidFunction = torch.nn.Sigmoid()
 
-        original_node_features = node_features.detach().clone()
-
         epsilon = 1e-7
 
         for i in range(node_features.shape[1]):
             # DOUBLE CHECK WITH DAS
             # intermediate_node_feature = self.FCNN_one(node_features[i].T)
-            intermediate_node_feature = self.FCNN_one(original_node_features[0][i])
+            intermediate_node_feature = self.FCNN_one(node_features[0][i])
 
             other_nodes_indices = []
             other_edges_indices = []
@@ -351,7 +350,7 @@ class NodeFeatures(torch.nn.Module):
                 edge_hat = other_edge_numerator / other_edges_denominator
                 # DOUBLE CHECK WITH DAS
                 # other_node_updated = self.FCNN_two(node_features[other_node_index].T)
-                other_node_updated = self.FCNN_two(original_node_features[0][other_node_index].T)
+                other_node_updated = self.FCNN_two(node_features[0][other_node_index].T)
                 intermediate_node_feature += edge_hat * other_node_updated
 
                 # print("edge_hat: ", edge_hat)
@@ -373,15 +372,17 @@ class NodeFeatures(torch.nn.Module):
             intermediate_node_feature = torch.reshape(intermediate_node_feature, (-1,))
             intermediate_node_feature = dropoutLayer(intermediate_node_feature)
 
+            node_features_updated = node_features.clone()
+
             # node_features[i] = F.relu(intermediate_node_feature).T
-            node_features[0][i] = (
-                (original_node_features[0][i].T + F.relu(intermediate_node_feature)).T).detach().clone()
+            node_features_updated[0][i] = (
+                (node_features[0][i].T + F.relu(intermediate_node_feature)).T)
 
             # print("actually updated node_features[i]: ", node_features[0][i])
             # print("actually updated node_features[i].size(): ", node_features[0][i].size())
             # print("********** NODE UPDATED SUCCESSFULLY ****************")
 
-        return node_features
+        return node_features_updated
 
 
 class GlobalFeatures(torch.nn.Module):
@@ -394,8 +395,6 @@ class GlobalFeatures(torch.nn.Module):
         self.FCNN_three = FCNN(c_in1=c_in1, c_out1=c_out1, c_out2=c_out2)
 
     def forward(self, node_features, edge_index, edge_features, global_features):
-        original_global_features = global_features.detach().clone()
-
         intermediate_global_features = self.FCNN_one(
             (torch.sum(node_features[0], dim=0) / (node_features[0].shape[0])).T) + \
                                        self.FCNN_two(
@@ -410,10 +409,12 @@ class GlobalFeatures(torch.nn.Module):
         intermediate_global_features = torch.reshape(intermediate_global_features, (-1,))
         intermediate_global_features = dropoutLayer(intermediate_global_features)
 
-        global_features[0][0] = (
-            (original_global_features[0][0].T + F.relu(intermediate_global_features)).T).detach().clone()
+        global_features_updated = global_features.clone()
 
-        return global_features
+        global_features_updated[0][0] = (
+            (global_features[0][0].T + F.relu(intermediate_global_features)).T)
+
+        return global_features_updated
 
 
 class Graph2Graph(torch.nn.Module):
@@ -442,24 +443,17 @@ class Features_Set2Set():
         self.edge_s2s = Set2Set(in_channels=initial_dim_out, processing_steps=6, num_layers=3).to(device)
 
     def transform_then_concat(self, node_features, edge_features, global_features):
-        # RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [1, 24]], which is output 0 of AsStridedBackward0, is at version 8; expected version 7 instead. Hint: the backtrace further above shows the operation that failed to compute its gradient. The variable in question was changed in there or anywhere later. Good luck!
-        # error above occurs if node and edge input features for Set2Set are not copied first
-
-        node_features_input = node_features.detach().clone()
-        edge_features_input = edge_features.detach().clone()
-        global_features_input = global_features.detach().clone()
-
-        node_features_input = torch.reshape(node_features_input,
-                                            (node_features_input.shape[1], node_features_input.shape[2]))
-        edge_features_input = torch.reshape(edge_features_input,
-                                            (edge_features_input.shape[1], edge_features_input.shape[2]))
+        node_features_input = torch.reshape(node_features,
+                                            (node_features.shape[1], node_features.shape[2]))
+        edge_features_input = torch.reshape(edge_features,
+                                            (edge_features.shape[1], edge_features.shape[2]))
 
         node_features_transformed = self.node_s2s(node_features_input)
         edge_features_transformed = self.edge_s2s(edge_features_input)
 
         node_features_transformed = torch.reshape(node_features_transformed, (-1,))
         edge_features_transformed = torch.reshape(edge_features_transformed, (-1,))
-        global_features_transformed = torch.reshape(global_features_input, (-1,))
+        global_features_transformed = torch.reshape(global_features, (-1,))
 
         concatenated_features = torch.cat(
             (node_features_transformed, edge_features_transformed, global_features_transformed))
@@ -566,7 +560,7 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
         loss.backward()
         optimizer.step()
 
-        loss_batch.append(loss.detach().item())
+        loss_batch.append(loss.item())
 
     loss_epoch = np.average(loss_batch)
 
@@ -581,7 +575,7 @@ def train_loop(dataloader, dataloader2, model, loss_fn, optimizer):
             yReshaped = torch.Tensor([y]).to(device)
             loss = loss_fn(pred, yReshaped)
 
-            val_loss_batch.append(loss.detach().item())
+            val_loss_batch.append(loss.item())
 
     val_loss_epoch = np.average(val_loss_batch)
 
@@ -681,7 +675,7 @@ def runGraphNeuralNetwork():
 
 
 def main():
-    # torch.autograd.set_detect_anomaly(True)
+    torch.autograd.set_detect_anomaly(True)
     runGraphNeuralNetwork()
 
 

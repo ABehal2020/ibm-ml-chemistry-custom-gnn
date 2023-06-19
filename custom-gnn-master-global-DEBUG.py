@@ -59,15 +59,15 @@ def featurize_data():
 
     kept_graph_indices = []
 
-    # currentNumInstances = 0 #### DEBUG ####
-    # maxInstances = 100 #### DEBUG ####
+    currentNumInstances = 0 #### DEBUG ####
+    maxInstances = 100 #### DEBUG ####
 
     global_feature_counter = 0
 
     # for i in range(100):
     for i in range(len(soldata)):
-        # if currentNumInstances == maxInstances: #### DEBUG ####
-            # break #### DEBUG ####
+        if currentNumInstances == maxInstances: #### DEBUG ####
+            break #### DEBUG ####
         graphInstance = gen_smiles2graph(soldata.SMILES[i])
         if hasattr(graphInstance, "node_features") and hasattr(graphInstance, "edge_index") and hasattr(graphInstance,
                                                                                                         "edge_features"):
@@ -108,7 +108,7 @@ def featurize_data():
             graph.append(graphInstance)
             sol.append(soldata.Solubility[i])
 
-            # currentNumInstances += 1 #### DEBUG ####
+            currentNumInstances += 1 #### DEBUG ####
 
     # remove rows of zeros from 2D array (these correspond to graphs that were never properly featurized
     # and will not be included in the dataset)
