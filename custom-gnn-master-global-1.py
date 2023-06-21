@@ -608,8 +608,8 @@ def plotLearningCurves(train_loss, val_loss):
     print(len(train_loss))
     print(len(val_loss))
 
-    print("train_loss: ", train_loss)
-    print("val_loss: ", val_loss)
+    print("train_loss = ", train_loss)
+    print("val_loss = ", val_loss)
 
     train_loss = torch.Tensor(train_loss).to(device)
     val_loss = torch.Tensor(val_loss).to(device)
@@ -661,6 +661,9 @@ def runGraphNeuralNetwork():
                                                                   model, loss_fn, optimizer)
         train_loss.append(train_loss_epoch_value)
         val_loss.append(val_loss_epoch_value)
+
+        print("train_loss = ", train_loss)
+        print("val_loss = ", val_loss)
 
         # test_loop(test_data, model, loss_fn)
 
